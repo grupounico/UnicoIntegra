@@ -22,11 +22,17 @@ import Logs from '../SystemLogs/Logs';
 import { getAuthSession } from '../../utils/authSession';
 import Clientes from '../Clientes/Clientes';
 import ClienteDetalhes from '../Clientes/ClienteDetalhes';
+import CatalogDeploymentsPage from '../Catalog/CatalogDeploymentsPage';
+import NewCatalogDeploymentPage from '../Catalog/NewCatalogDeploymentPage';
+import CatalogDeploymentDetailsPage from '../Catalog/CatalogDeploymentDetailsPage';
+import CatalogActivationReviewPage from '../Catalog/CatalogActivationReviewPage';
+import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
 
 export default function App() {
   const session = getAuthSession();
+  const isCatalogDemo = CATALOG_DEMO_MODE && window.location.pathname.startsWith('/main/catalogo');
 
-  if (!session) {
+  if (!session && !isCatalogDemo) {
     return <Navigate to="/" replace />;
   }
 
@@ -65,6 +71,10 @@ export default function App() {
             <Route path="logs" element={<Logs />} />
             <Route path="clientes/:id" element={<ClienteDetalhes />} />
             <Route path="clientes" element={<Clientes />} />
+            <Route path="catalogo" element={<CatalogDeploymentsPage />} />
+            <Route path="catalogo/novo" element={<NewCatalogDeploymentPage />} />
+            <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />
+            <Route path="catalogo/:deploymentId" element={<CatalogDeploymentDetailsPage />} />
             <Route path="*" element={<Navigate to="home" replace />} />
           </Routes>
 

@@ -11,6 +11,7 @@ import {
   Logs,
   Plug,
   Puzzle,
+  ShoppingBasket,
   Users,
 } from 'lucide-react';
 import ConfirmDialog from '../ConfirmDialog';
@@ -40,6 +41,7 @@ export default function Header() {
     { path: '/main/link-ai', icon: Bot, description: 'Link IA' },
     { path: '/main/aplications', icon: Boxes, description: 'Serviços' },
     { path: '/main/clientes', icon: Users, description: 'Clientes' },
+    { path: '/main/catalogo', icon: ShoppingBasket, description: 'Catálogo de produtos' },
   ];
 
   const secondaryMenuItems = [
