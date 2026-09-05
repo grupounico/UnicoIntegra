@@ -1,3 +1,5 @@
+import { API_BASE } from './api';
+
 export type AssetType =
   | 'banner_1'
   | 'banner_2'
@@ -160,11 +162,10 @@ export interface CreateDeploymentPayload {
 }
 
 const ASSET_TYPES: AssetType[] = ['banner_1', 'banner_2', 'banner_3', 'logo_desktop', 'logo_mobile'];
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
 const MOCK_STORAGE_KEY = 'unico-catalog-deployments-v2';
 
 export const CATALOG_DEMO_MODE = import.meta.env.VITE_CATALOG_MOCK === 'true'
-  || (import.meta.env.DEV && !import.meta.env.VITE_API_URL);
+  || (import.meta.env.DEV && !import.meta.env.VITE_URLBASE);
 
 export class CatalogApiError extends Error {
   details: DeploymentError;
