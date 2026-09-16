@@ -51,6 +51,7 @@ export interface UnitForm {
   cnpj: string;
   sourceUnitId: number;
   credentialRef: string;
+  orderWebhookUrl: string;
   provider?: 'alpha7';
   pageSize?: number;
   validEanDropThresholdBps?: number;
@@ -244,7 +245,8 @@ function demoDeployment(input: {
   const createdAt = new Date(Date.now() - input.ageHours * 3_600_000).toISOString();
   const units = input.unitNames.map((name, index) => makeUnit(id, {
     codigo: index === 0 ? 'MATRIZ' : `FILIAL-${index}`, nome: name, cnpj: input.cnpj,
-    sourceUnitId: index + 1, credentialRef: 'postgresql://demo:demo@localhost:5432/catalogo', initial: index === 0,
+    sourceUnitId: index + 1, credentialRef: 'postgresql://demo:demo@localhost:5432/catalogo',
+    orderWebhookUrl: `https://pedidos.example.com/webhooks/${index + 1}`, initial: index === 0,
   }));
   units.forEach((unit) => {
     unit.status = input.status === 'completed' ? 'active'
