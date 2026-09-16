@@ -17,7 +17,7 @@ const assetDefinitions: Array<{ type: AssetType; label: string; hint: string }> 
 ];
 
 function newUnit(index = 0): UnitForm {
-  return { codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', sourceUnitId: index + 1, credentialRef: '', provider: 'alpha7', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
+  return { codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', sourceUnitId: index + 1, credentialRef: '', orderWebhookUrl: '', provider: 'alpha7', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
 }
 
 function isValidCnpj(value: string) {
@@ -70,6 +70,18 @@ function validateUnits(units: UnitForm[]) {
       if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.username || !url.pathname.slice(1)) throw new Error();
     } catch {
       errors[`${prefix}-credential`] = 'Use uma URL PostgreSQL completa e válida.';
+    }
+    if (!unit.orderWebhookUrl.trim()) {
+      errors[`${prefix}-webhook`] = 'Informe a URL HTTPS que receberá os pedidos.';
+    } else if (unit.orderWebhookUrl.trim().length > 2048) {
+      errors[`${prefix}-webhook`] = 'Use no máximo 2048 caracteres.';
+    } else {
+      try {
+        const url = new URL(unit.orderWebhookUrl.trim());
+        if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) throw new Error();
+      } catch {
+        errors[`${prefix}-webhook`] = 'Use uma URL válida iniciada por https://, sem usuário ou senha.';
+      }
     }
     if (!Number.isInteger(Number(unit.pageSize)) || Number(unit.pageSize) < 1 || Number(unit.pageSize) > 500) errors[`${prefix}-pageSize`] = 'Use um valor entre 1 e 500.';
     if (!Number.isInteger(Number(unit.validEanDropThresholdBps)) || Number(unit.validEanDropThresholdBps) < 0 || Number(unit.validEanDropThresholdBps) > 10000) errors[`${prefix}-threshold`] = 'Use um valor entre 0 e 10000.';
@@ -134,7 +146,7 @@ export default function NewCatalogDeploymentPage() {
     setSaving(true);
     setSubmitError('');
     try {
-      const normalizedUnits = units.map((unit, index) => ({ ...unit, codigo: unit.codigo.trim(), nome: unit.nome.trim(), cnpj: unit.cnpj.replace(/\D/g, ''), sourceUnitId: Number(unit.sourceUnitId), pageSize: Number(unit.pageSize), validEanDropThresholdBps: Number(unit.validEanDropThresholdBps), initial: units.some((item) => item.initial) ? unit.initial : index === 0 }));
+      const normalizedUnits = units.map((unit, index) => ({ ...unit, codigo: unit.codigo.trim(), nome: unit.nome.trim(), cnpj: unit.cnpj.replace(/\D/g, ''), sourceUnitId: Number(unit.sourceUnitId), credentialRef: unit.credentialRef.trim(), orderWebhookUrl: unit.orderWebhookUrl.trim(), pageSize: Number(unit.pageSize), validEanDropThresholdBps: Number(unit.validEanDropThresholdBps), initial: units.some((item) => item.initial) ? unit.initial : index === 0 }));
       const created = await createDeployment({ requestedBy, group: { ...group, cnpj: group.cnpj.replace(/\D/g, ''), nome: group.nome.trim(), username: group.username.trim() }, units: normalizedUnits });
       setDeployment(created);
       setStep(3);
@@ -210,6 +222,7 @@ export default function NewCatalogDeploymentPage() {
                       <label className={labelClass}>CNPJ da unidade<input value={unit.cnpj} onChange={(event) => changeUnit(index, { cnpj: formatCnpj(event.target.value) })} className={fieldClass} inputMode="numeric" placeholder="00.000.000/0000-00" /><FieldError message={errors[`unit-${index}-cnpj`]} /></label>
                       <label className={labelClass}>ID da unidade no Alpha7<input value={unit.sourceUnitId} onChange={(event) => changeUnit(index, { sourceUnitId: Number(event.target.value) })} className={fieldClass} type="number" min={1} step={1} /><FieldError message={errors[`unit-${index}-source`]} /></label>
                       <label className={`${labelClass} sm:col-span-2`}>Conexão PostgreSQL<div className="relative"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[index] ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="postgresql://usuario:senha@host:5432/database" /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [index]: !current[index] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[index] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[index] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">Codifique caracteres especiais do usuário e senha, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p><FieldError message={errors[`unit-${index}-credential`]} /></label>
+                      <label className={`${labelClass} sm:col-span-2`}>Webhook de pedidos<input value={unit.orderWebhookUrl} onChange={(event) => changeUnit(index, { orderWebhookUrl: event.target.value })} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="url" spellCheck={false} placeholder="https://api.exemplo.com/webhooks/pedidos" aria-invalid={Boolean(errors[`unit-${index}-webhook`])} /><p className="mt-1.5 text-xs leading-5 text-slate-500">URL HTTPS que receberá os pedidos feitos para esta unidade.</p><FieldError message={errors[`unit-${index}-webhook`]} /></label>
                       <label className={labelClass}>Itens por página<input value={unit.pageSize} onChange={(event) => changeUnit(index, { pageSize: Number(event.target.value) })} className={fieldClass} type="number" min={1} max={500} /><FieldError message={errors[`unit-${index}-pageSize`]} /></label>
                       <label className={labelClass}>Limite de queda de EAN (bps)<input value={unit.validEanDropThresholdBps} onChange={(event) => changeUnit(index, { validEanDropThresholdBps: Number(event.target.value) })} className={fieldClass} type="number" min={0} max={10000} /><FieldError message={errors[`unit-${index}-threshold`]} /></label>
                       <div className="flex items-center justify-between gap-4 sm:col-span-2"><label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="radio" name="initial-unit" checked={unit.initial === true} onChange={() => chooseInitial(index)} className="size-4 accent-[#145efc]" />Unidade inicial do grupo</label>{units.length > 1 ? <button type="button" onClick={() => { setUnits((current) => { const remaining = current.filter((_, unitIndex) => unitIndex !== index); if (!remaining.some((item) => item.initial) && remaining[0]) remaining[0] = { ...remaining[0], initial: true }; return remaining; }); setExpanded(0); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700"><Trash2 className="size-3.5" />Remover</button> : null}</div>
