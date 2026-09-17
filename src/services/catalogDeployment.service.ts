@@ -69,16 +69,39 @@ export interface DeploymentUnit {
   isInitial: boolean;
   provider: 'alpha7';
   sourceUnitId: number;
-  publicationMode: 'shadow';
+  publicationMode: 'shadow' | 'automatic';
   pageSize: number;
   validEanDropThresholdBps: number;
+  hasCredential: boolean;
+  hasOrderWebhookUrl: boolean;
   status: UnitStatus;
   hubSellerUnitId: string | null;
   hubIntegrationId: string | null;
   latestRunId: string | null;
   latestRunStatus: string | null;
+  latestProcessedRows?: number | null;
   latestValidRows: number | null;
+  latestPublishedRows?: number | null;
+  latestRunScheduledAt?: string | null;
+  latestRunStartedAt?: string | null;
   latestRunFinishedAt: string | null;
+  latestRunPolledAt?: string | null;
+  nextRunPollAt?: string | null;
+  monitoringDelayedAt?: string | null;
+  hubRun?: {
+    runId: string;
+    status: string | null;
+    upstreamStatus: string | null;
+    processedRows: number | null;
+    validRows: number | null;
+    publishedRows: number | null;
+    scheduledAt: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    lastPolledAt: string | null;
+    nextPollAt: string | null;
+    delayedAt: string | null;
+  } | null;
   unicommerceTenantId: string | null;
   clientId: number | null;
   bancoUnicoImportJobId: number | null;
@@ -162,6 +185,18 @@ export interface CreateDeploymentPayload {
   units: UnitForm[];
 }
 
+export interface UpdateDeploymentUnitPayload {
+  requestedBy: string;
+  codigo?: string;
+  nome?: string;
+  cnpj?: string;
+  sourceUnitId?: number;
+  credentialRef?: string;
+  orderWebhookUrl?: string;
+  pageSize?: number;
+  validEanDropThresholdBps?: number;
+}
+
 const ASSET_TYPES: AssetType[] = ['banner_1', 'banner_2', 'banner_3', 'logo_desktop', 'logo_mobile'];
 const MOCK_STORAGE_KEY = 'unico-catalog-deployments-v2';
 
@@ -219,8 +254,9 @@ function makeUnit(deploymentId: string, input: UnitForm): DeploymentUnit {
     id: uuid(), deploymentId, code: input.codigo, name: input.nome, cnpj: input.cnpj.replace(/\D/g, ''),
     slug: slugBase.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
     isInitial: input.initial === true, provider: 'alpha7', sourceUnitId: input.sourceUnitId,
-    publicationMode: 'shadow', pageSize: input.pageSize ?? 500,
-    validEanDropThresholdBps: input.validEanDropThresholdBps ?? 1000, status: 'pending',
+    publicationMode: 'automatic', pageSize: input.pageSize ?? 500,
+    validEanDropThresholdBps: input.validEanDropThresholdBps ?? 1000,
+    hasCredential: Boolean(input.credentialRef), hasOrderWebhookUrl: Boolean(input.orderWebhookUrl), status: 'pending',
     hubSellerUnitId: null, hubIntegrationId: null, latestRunId: null, latestRunStatus: null,
     latestValidRows: null, latestRunFinishedAt: null, unicommerceTenantId: null, clientId: null,
     bancoUnicoImportJobId: null, lastErrorCode: null, lastErrorMessage: null, retryable: false,
@@ -367,6 +403,45 @@ export async function createDeployment(payload: CreateDeploymentPayload): Promis
   return deployment;
 }
 
+export async function updateDeploymentUnit(id: string, unitId: string, payload: UpdateDeploymentUnitPayload): Promise<Deployment> {
+  if (!CATALOG_DEMO_MODE) return request(`/api/v1/deployments/${id}/units/${unitId}`, { method: 'PATCH', body: JSON.stringify(payload) }, true);
+  return mockUpdate(id, (deployment) => {
+    const now = new Date().toISOString();
+    const updatedUnits = deployment.units.map((unit) => {
+      if (unit.id !== unitId) return unit;
+      const hubConfigurationChanged = Boolean(payload.credentialRef)
+        || (payload.pageSize !== undefined && payload.pageSize !== unit.pageSize)
+        || (payload.validEanDropThresholdBps !== undefined && payload.validEanDropThresholdBps !== unit.validEanDropThresholdBps);
+      return {
+        ...unit,
+        code: payload.codigo ?? unit.code,
+        name: payload.nome ?? unit.name,
+        cnpj: payload.cnpj?.replace(/\D/g, '') ?? unit.cnpj,
+        sourceUnitId: payload.sourceUnitId ?? unit.sourceUnitId,
+        pageSize: payload.pageSize ?? unit.pageSize,
+        validEanDropThresholdBps: payload.validEanDropThresholdBps ?? unit.validEanDropThresholdBps,
+        hasCredential: payload.credentialRef ? true : unit.hasCredential,
+        hasOrderWebhookUrl: payload.orderWebhookUrl ? true : unit.hasOrderWebhookUrl,
+        status: hubConfigurationChanged && unit.hubIntegrationId ? 'integration_created' as UnitStatus : unit.status === 'failed' ? (payload.orderWebhookUrl && unit.hubIntegrationId && (unit.unicommerceTenantId || Number(unit.latestValidRows || 0) > 0) ? 'catalog_active' : unit.hubIntegrationId ? 'scheduled' : unit.hubSellerUnitId ? 'hub_unit_created' : 'pending') : unit.status,
+        latestRunId: hubConfigurationChanged ? null : unit.latestRunId,
+        latestRunStatus: hubConfigurationChanged ? null : unit.latestRunStatus,
+        latestValidRows: hubConfigurationChanged ? null : unit.latestValidRows,
+        latestRunFinishedAt: hubConfigurationChanged ? null : unit.latestRunFinishedAt,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        retryable: false,
+      };
+    });
+    return {
+      ...deployment,
+      units: updatedUnits,
+      retryable: true,
+      updatedAt: now,
+      events: [...deployment.events, { id: uuid(), deploymentId: id, unitId, eventType: 'unit_configuration_updated', fromStatus: deployment.units.find((unit) => unit.id === unitId)?.status ?? null, toStatus: updatedUnits.find((unit) => unit.id === unitId)?.status ?? null, safeMetadata: { valuesProtected: Boolean(payload.credentialRef || payload.orderWebhookUrl) }, createdBy: payload.requestedBy, createdAt: now }],
+    };
+  });
+}
+
 async function sha256(file: File) {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -402,7 +477,6 @@ async function simpleAction(id: string, path: string, requestedBy: string) {
 export const retryDeployment = (id: string, requestedBy: string) => simpleAction(id, '/retry', requestedBy);
 export const retryUnit = (id: string, unitId: string, requestedBy: string) => simpleAction(id, `/units/${unitId}/retry`, requestedBy);
 export const runUnit = (id: string, unitId: string, requestedBy: string) => simpleAction(id, `/units/${unitId}/run`, requestedBy);
-export const activateShadow = (id: string, unitId: string, requestedBy: string) => simpleAction(id, `/units/${unitId}/activate-shadow`, requestedBy);
 
 export async function activateTenants(id: string, requestedBy: string) {
   if (!CATALOG_DEMO_MODE) return request<Deployment>(`/api/v1/deployments/${id}/activate-tenants`, { method: 'POST', body: JSON.stringify({ requestedBy }) }, true);

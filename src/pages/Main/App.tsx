@@ -26,6 +26,7 @@ import CatalogDeploymentsPage from '../Catalog/CatalogDeploymentsPage';
 import NewCatalogDeploymentPage from '../Catalog/NewCatalogDeploymentPage';
 import CatalogDeploymentDetailsPage from '../Catalog/CatalogDeploymentDetailsPage';
 import CatalogActivationReviewPage from '../Catalog/CatalogActivationReviewPage';
+import EditCatalogDeploymentPage from '../Catalog/EditCatalogDeploymentPage';
 import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
 
 export default function App() {
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="catalogo" element={<CatalogDeploymentsPage />} />
             <Route path="catalogo/novo" element={<NewCatalogDeploymentPage />} />
             <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />
+            <Route path="catalogo/:deploymentId/corrigir" element={<EditCatalogDeploymentPage />} />
             <Route path="catalogo/:deploymentId" element={<CatalogDeploymentDetailsPage />} />
             <Route path="*" element={<Navigate to="home" replace />} />
           </Routes>
