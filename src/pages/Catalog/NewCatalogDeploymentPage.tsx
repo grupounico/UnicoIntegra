@@ -12,12 +12,15 @@ const assetDefinitions: Array<{ type: AssetType; label: string; hint: string }> 
   { type: 'banner_1', label: 'Banner principal', hint: 'Imagem de destaque 1' },
   { type: 'banner_2', label: 'Banner secundário', hint: 'Imagem de destaque 2' },
   { type: 'banner_3', label: 'Banner complementar', hint: 'Imagem de destaque 3' },
+  { type: 'banner_mobile_1', label: 'Banner principal mobile', hint: 'Destaque 1 · 2000×800' },
+  { type: 'banner_mobile_2', label: 'Banner secundário mobile', hint: 'Destaque 2 · 2000×800' },
+  { type: 'banner_mobile_3', label: 'Banner complementar mobile', hint: 'Destaque 3 · 2000×800' },
   { type: 'logo_desktop', label: 'Logo desktop', hint: 'Versão horizontal' },
   { type: 'logo_mobile', label: 'Logo mobile', hint: 'Versão compacta' },
 ];
 
 function newUnit(index = 0): UnitForm {
-  return { codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', sourceUnitId: index + 1, credentialRef: '', orderWebhookUrl: '', provider: 'alpha7', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
+  return { codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', slug: '', sourceUnitId: index + 1, credentialRef: '', orderWebhookUrl: '', provider: 'alpha7', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
 }
 
 function isValidCnpj(value: string) {
@@ -61,6 +64,7 @@ function validateUnits(units: UnitForm[]) {
     else if (codes.has(code)) errors[`${prefix}-codigo`] = 'Este código já está em uso.';
     codes.add(code);
     if (!unit.nome.trim()) errors[`${prefix}-nome`] = 'Informe o nome da unidade.';
+    if (unit.slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(unit.slug)) errors[`${prefix}-slug`] = 'Use letras minúsculas, números e hífens.';
     if (!isValidCnpj(unit.cnpj)) errors[`${prefix}-cnpj`] = 'Informe um CNPJ válido.';
     if (!Number.isInteger(Number(unit.sourceUnitId)) || Number(unit.sourceUnitId) <= 0) errors[`${prefix}-source`] = 'Use um número inteiro positivo.';
     else if (sourceIds.has(Number(unit.sourceUnitId))) errors[`${prefix}-source`] = 'Este ID já está em uso.';
@@ -219,6 +223,7 @@ export default function NewCatalogDeploymentPage() {
                     {isOpen ? <div className="grid gap-5 bg-slate-50/70 px-5 py-5 sm:grid-cols-2 sm:px-6">
                       <label className={labelClass}>Código da unidade<input value={unit.codigo} onChange={(event) => changeUnit(index, { codigo: event.target.value.toUpperCase() })} className={fieldClass} maxLength={100} placeholder="MATRIZ" /><FieldError message={errors[`unit-${index}-codigo`]} /></label>
                       <label className={labelClass}>Nome da unidade<input value={unit.nome} onChange={(event) => changeUnit(index, { nome: event.target.value })} className={fieldClass} maxLength={255} placeholder="Farmácia Matriz" /><FieldError message={errors[`unit-${index}-nome`]} /></label>
+                      <label className={labelClass}>Slug do tenant<input value={unit.slug || ''} onChange={(event) => changeUnit(index, { slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} className={fieldClass} maxLength={100} placeholder="whatsapp-rede-saude" /><p className="mt-1.5 text-xs text-slate-500">Opcional; quando informado, será preservado exatamente.</p><FieldError message={errors[`unit-${index}-slug`]} /></label>
                       <label className={labelClass}>CNPJ da unidade<input value={unit.cnpj} onChange={(event) => changeUnit(index, { cnpj: formatCnpj(event.target.value) })} className={fieldClass} inputMode="numeric" placeholder="00.000.000/0000-00" /><FieldError message={errors[`unit-${index}-cnpj`]} /></label>
                       <label className={labelClass}>ID da unidade no Alpha7<input value={unit.sourceUnitId} onChange={(event) => changeUnit(index, { sourceUnitId: Number(event.target.value) })} className={fieldClass} type="number" min={1} step={1} /><FieldError message={errors[`unit-${index}-source`]} /></label>
                       <label className={`${labelClass} sm:col-span-2`}>Conexão PostgreSQL<div className="relative"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[index] ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="postgresql://usuario:senha@host:5432/database" /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [index]: !current[index] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[index] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[index] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">Codifique caracteres especiais do usuário e senha, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p><FieldError message={errors[`unit-${index}-credential`]} /></label>
@@ -234,7 +239,7 @@ export default function NewCatalogDeploymentPage() {
             </form> : null}
 
             {step === 3 && deployment ? <div className="rounded-xl border border-[#dbe3ef] bg-white">
-              <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 3 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Identidade visual</h2><p className="mt-1 text-sm leading-6 text-slate-500">Envie as cinco imagens obrigatórias. O upload é feito diretamente para o storage seguro.</p></div>
+              <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 3 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Identidade visual</h2><p className="mt-1 text-sm leading-6 text-slate-500">Envie os oito assets obrigatórios para desktop e mobile. O upload é feito diretamente para o storage seguro.</p></div>
               <div className="m-5 flex gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800 sm:m-6"><Info className="mt-0.5 size-4 shrink-0" /><p>O rascunho foi criado. Os dados não podem ser editados nesta etapa; para alterá-los, cancele e crie uma nova implantação.</p></div>
               <div className="grid gap-4 px-5 pb-6 sm:grid-cols-2 sm:px-6 lg:grid-cols-3">{assetDefinitions.map(({ type, label, hint }) => {
                 const upload = uploads[type];
@@ -246,7 +251,7 @@ export default function NewCatalogDeploymentPage() {
                   <span className="relative mt-auto pt-6"><span className="block text-sm font-semibold text-slate-900">{label}</span><span className="mt-1 block text-xs text-slate-500">{confirmed ? upload.fileName || 'Arquivo confirmado' : upload.state === 'uploading' ? 'Enviando e confirmando…' : hint}</span>{upload.message ? <span className="mt-1 block text-xs font-medium text-rose-600">{upload.message}</span> : null}</span>
                 </label>;
               })}</div>
-              <div className="flex flex-col gap-3 border-t border-[#dbe3ef] px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm text-slate-600"><FileImage className="size-4" /><strong className="font-semibold text-slate-900">{confirmedCount} de 5</strong> arquivos confirmados</div><div className="flex flex-col-reverse gap-3 sm:flex-row"><Link to={`/main/catalogo/${deployment.id}`} className={secondaryButtonClass}>Continuar depois</Link><button type="button" onClick={() => void handleStart()} disabled={!allConfirmed || starting} className={primaryButtonClass}>{starting ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}{starting ? 'Iniciando…' : 'Iniciar implantação'}</button></div></div>
+              <div className="flex flex-col gap-3 border-t border-[#dbe3ef] px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm text-slate-600"><FileImage className="size-4" /><strong className="font-semibold text-slate-900">{confirmedCount} de {assetDefinitions.length}</strong> arquivos confirmados</div><div className="flex flex-col-reverse gap-3 sm:flex-row"><Link to={`/main/catalogo/${deployment.id}`} className={secondaryButtonClass}>Continuar depois</Link><button type="button" onClick={() => void handleStart()} disabled={!allConfirmed || starting} className={primaryButtonClass}>{starting ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}{starting ? 'Iniciando…' : 'Iniciar implantação'}</button></div></div>
             </div> : null}
 
             {submitError ? <div role="alert" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{submitError}</div> : null}
@@ -254,8 +259,8 @@ export default function NewCatalogDeploymentPage() {
 
           <aside className="h-fit rounded-xl border border-[#dbe3ef] bg-white p-5 lg:sticky lg:top-6">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Resumo</p><h2 className="mt-2 text-lg font-semibold tracking-[-0.025em] text-slate-950">{groupSummary}</h2><p className="mt-1 text-sm text-slate-500">{group.cnpj ? formatCnpj(group.cnpj) : 'CNPJ ainda não informado'}</p>
-            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Provedor</dt><dd className="font-medium text-slate-800">Alpha7</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Publicação</dt><dd className="font-medium text-slate-800">Shadow</dd></div></dl>
-            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500"><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>A ativação acontece após sua revisão.</li></ol></div>
+            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Catálogo</dt><dd className="font-medium text-slate-800">Hub Único</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Publicação</dt><dd className="font-medium text-slate-800">Automática</dd></div></dl>
+            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500"><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>A ativação acontece automaticamente após os gates.</li></ol></div>
           </aside>
         </div>
       </main>

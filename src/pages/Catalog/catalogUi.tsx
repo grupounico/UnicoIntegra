@@ -13,6 +13,7 @@ const STATUS_LABELS: Record<DeploymentStatus | UnitStatus, string> = {
   draft: 'Rascunho', queued: 'Na fila', provisioning_hub: 'Criando no Hub', validating_hub_catalog: 'Validando catálogo',
   provisioning_unicommerce: 'Criando Unicommerce', validating_unicommerce: 'Validando Unicommerce', importing_banco_unico: 'Importando produtos',
   awaiting_activation: 'Aguardando ativação', completed: 'Concluído', partially_failed: 'Concluído com ressalvas', failed: 'Falhou',
+  waiting_storefront_release: 'Aguardando release da main',
   monitoring_timeout: 'Tempo de monitoramento excedido', reconciliation_required: 'Reconciliação necessária', cancelled: 'Cancelado',
   pending: 'Pendente', hub_unit_created: 'Unidade criada no Hub', integration_created: 'Integração criada', scheduled: 'Carga agendada',
   running: 'Carga em andamento', shadow_ready: 'Snapshot pronto', catalog_active: 'Catálogo validado',
@@ -25,7 +26,7 @@ export function statusTone(status: DeploymentStatus | UnitStatus): Tone {
   if (['completed', 'catalog_active', 'unicommerce_ready', 'active'].includes(status)) return 'success';
   if (['failed'].includes(status)) return 'danger';
   if (['partially_failed', 'reconciliation_required'].includes(status)) return 'orange';
-  if (['awaiting_activation', 'monitoring_timeout'].includes(status)) return 'warning';
+  if (['awaiting_activation', 'waiting_storefront_release', 'monitoring_timeout'].includes(status)) return 'warning';
   if (['queued', 'scheduled', 'running', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'hub_unit_created', 'integration_created', 'shadow_ready', 'unicommerce_tenant_created', 'banco_unico_importing'].includes(status)) return 'info';
   return 'neutral';
 }
