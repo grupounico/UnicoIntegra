@@ -4,6 +4,9 @@ export type AssetType =
   | 'banner_1'
   | 'banner_2'
   | 'banner_3'
+  | 'banner_mobile_1'
+  | 'banner_mobile_2'
+  | 'banner_mobile_3'
   | 'logo_desktop'
   | 'logo_mobile';
 
@@ -15,6 +18,7 @@ export type DeploymentStatus =
   | 'provisioning_unicommerce'
   | 'validating_unicommerce'
   | 'importing_banco_unico'
+  | 'waiting_storefront_release'
   | 'awaiting_activation'
   | 'completed'
   | 'partially_failed'
