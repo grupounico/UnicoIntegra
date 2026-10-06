@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowRight, Ban, Boxes, Check, Circle, ExternalLink, Loader2, PencilLine, Play, RefreshCw, RotateCcw, Server, Store, TriangleAlert } from 'lucide-react';
+import { Activity, ArrowRight, Ban, Boxes, Check, Circle, Copy, Eye, EyeOff, ExternalLink, KeyRound, Loader2, PencilLine, Play, RefreshCw, RotateCcw, Server, Store, TriangleAlert, X } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { cancelDeployment, getDeployment, refreshDeploymentRuns, retryDeployment, retryUnit, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit } from '../../services/catalogDeployment.service';
+import { cancelDeployment, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, retryDeployment, retryUnit, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, StatusBadge, formatCnpj, formatDate, primaryButtonClass, secondaryButtonClass, statusLabel } from './catalogUi';
 
@@ -36,6 +36,7 @@ const eventLabels: Record<string, string> = {
   hub_activation_pending: 'Ativação do catálogo em processamento',
   unit_hub_banco_ready: 'Cobertura mínima atingida no Banco Único',
   hub_banco_only_completed: 'Hub e Banco Único concluídos',
+  seller_token_revealed: 'Token do Hub consultado',
 };
 
 function DeploymentTimeline({ events, units }: { events: DeploymentEvent[]; units: DeploymentUnit[] }) {
@@ -61,6 +62,43 @@ function ErrorResolutionCard({ deployment, onRetry, onReconciliation, busy }: { 
   return <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 sm:p-6"><div className="flex gap-4"><span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700"><TriangleAlert className="size-5" /></span><div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-600">{deployment.lastErrorCode || 'Atenção necessária'}</p><h2 className="mt-1 text-base font-semibold text-rose-950">{deployment.lastErrorMessage || 'A implantação precisa de intervenção.'}</h2><p className="mt-2 text-sm leading-6 text-rose-800">{action}</p><dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-rose-800"><div><dt className="inline text-rose-600">Etapa: </dt><dd className="inline font-semibold">{deployment.currentStage ? statusLabel(deployment.currentStage as DeploymentStatus) : 'Não informada'}</dd></div><div><dt className="inline text-rose-600">Unidade: </dt><dd className="inline font-semibold">{affectedUnit?.name || 'Implantação geral'}</dd></div></dl><div className="mt-5 flex flex-wrap gap-3">{deployment.retryable ? <button type="button" onClick={onRetry} disabled={busy} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Tentar novamente</button> : null}{deployment.status === 'reconciliation_required' || deployment.lastErrorCode === 'RECONCILIATION_REQUIRED' ? <button type="button" onClick={onReconciliation} className={secondaryButtonClass}><ExternalLink className="size-4" />Solicitar reconciliação</button> : null}</div></div></div></section>;
 }
 
+function SellerTokenDialog({ deploymentId, requestedBy, onClose }: { deploymentId: string; requestedBy: string; onClose: () => void }) {
+  const [credential, setCredential] = useState<SellerAccessToken | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [visible, setVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void revealDeploymentSellerToken(deploymentId, requestedBy)
+      .then((result) => { if (active) setCredential(result); })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Não foi possível obter o token do Hub.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [deploymentId, requestedBy]);
+
+  async function copyToken() {
+    if (!credential) return;
+    try {
+      await navigator.clipboard.writeText(credential.token);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Não foi possível copiar automaticamente. Revele o token e copie manualmente.');
+    }
+  }
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-labelledby="seller-token-title">
+    <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+      <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-primary"><KeyRound className="size-5" /></span><div><h2 id="seller-token-title" className="text-base font-semibold text-slate-950">Token de consulta do Hub</h2><p className="mt-1 text-xs leading-5 text-slate-500">Use esta credencial no header <code className="rounded bg-slate-100 px-1.5 py-0.5">X-API-Key</code> para consultar os recursos deste seller no Hub.</p></div></div><button type="button" onClick={onClose} className="flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Fechar"><X className="size-4" /></button></div>
+      <div className="mt-5">
+        {loading ? <div className="flex min-h-24 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500"><Loader2 className="size-4 animate-spin text-primary" />Obtendo token…</div> : error && !credential ? <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : credential ? <><label className="text-xs font-semibold text-slate-700">X-API-Key</label><div className="mt-2 flex gap-2"><div className="relative min-w-0 flex-1"><input readOnly value={credential.token} type={visible ? 'text' : 'password'} className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-3 pr-11 font-mono text-xs text-slate-800 outline-none focus:border-primary focus:ring-2 focus:ring-blue-100" /><button type="button" onClick={() => setVisible((current) => !current)} className="absolute right-1 top-1 flex size-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={visible ? 'Ocultar token' : 'Mostrar token'}>{visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void copyToken()} className={secondaryButtonClass}>{copied ? <Check className="size-4 text-emerald-600" /> : <Copy className="size-4" />}{copied ? 'Copiado' : 'Copiar'}</button></div><p className="mt-2 text-xs text-slate-500">Seller {credential.hubSellerId}. O token não dá acesso direto ao PostgreSQL de origem.</p>{error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}</> : null}
+      </div>
+    </div>
+  </div>;
+}
+
 export default function CatalogDeploymentDetailsPage() {
   const { deploymentId = '' } = useParams();
   const session = getAuthSession();
@@ -72,6 +110,7 @@ export default function CatalogDeploymentDetailsPage() {
   const [busyAction, setBusyAction] = useState('');
   const [refreshingRun, setRefreshingRun] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  const [showSellerToken, setShowSellerToken] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!deploymentId) return;
@@ -147,12 +186,13 @@ export default function CatalogDeploymentDetailsPage() {
   if (error || !deployment) return <CatalogScreen><CatalogPageHeader title="Implantação indisponível" description="Não foi possível abrir este acompanhamento." backTo="/main/catalogo" /><main className="p-8"><EmptyState title="Não foi possível carregar" description={error || 'Implantação não encontrada.'} action={<button type="button" onClick={() => void load()} className={primaryButtonClass}>Tentar novamente</button>} /></main></CatalogScreen>;
 
   if (deployment.flowMode === 'hub_banco_only' && processingStatuses.includes(deployment.status)) return <CatalogScreen>
-    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · Hub + Banco Único`} backTo="/main/catalogo" action={<button type="button" onClick={() => void refreshRuns()} disabled={refreshingRun} className={secondaryButtonClass}>{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar</button>} />
+    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · Hub + Banco Único`} backTo="/main/catalogo" action={<div className="flex items-center gap-2">{deployment.hubSellerId ? <button type="button" onClick={() => setShowSellerToken(true)} className={secondaryButtonClass}><KeyRound className="size-4" />Token do Hub</button> : null}<button type="button" onClick={() => void refreshRuns()} disabled={refreshingRun} className={secondaryButtonClass}>{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar</button></div>} />
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center"><Loader2 className="size-9 animate-spin text-primary" /><div><p className="text-base font-semibold text-slate-900">Isso pode levar alguns minutos</p><p className="mt-1 text-sm text-slate-500">Consultaremos o mesmo run no Hub automaticamente a cada minuto.</p></div></div>
+    {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}
   </CatalogScreen>;
 
   return <CatalogScreen>
-    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · @${deployment.username}`} backTo="/main/catalogo" action={<div className="flex items-center gap-2"><button type="button" onClick={() => void (processingStatuses.includes(deployment.status) ? refreshRuns() : load(true))} disabled={refreshingRun} className="flex size-10 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-60" aria-label="Atualizar">{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}</button>{['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <Link to={`/main/catalogo/${deployment.id}/corrigir`} className={secondaryButtonClass}><PencilLine className="size-4" /><span className="hidden sm:inline">Corrigir dados</span></Link> : null}{deployment.status === 'awaiting_activation' ? <Link to={`/main/catalogo/${deployment.id}/revisao`} className={primaryButtonClass}>Revisar ativação<ArrowRight className="size-4" /></Link> : null}</div>} />
+    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · @${deployment.username}`} backTo="/main/catalogo" action={<div className="flex items-center gap-2">{deployment.hubSellerId ? <button type="button" onClick={() => setShowSellerToken(true)} className={secondaryButtonClass}><KeyRound className="size-4" /><span className="hidden sm:inline">Token do Hub</span></button> : null}<button type="button" onClick={() => void (processingStatuses.includes(deployment.status) ? refreshRuns() : load(true))} disabled={refreshingRun} className="flex size-10 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-60" aria-label="Atualizar">{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}</button>{['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <Link to={`/main/catalogo/${deployment.id}/corrigir`} className={secondaryButtonClass}><PencilLine className="size-4" /><span className="hidden sm:inline">Corrigir dados</span></Link> : null}{deployment.status === 'awaiting_activation' ? <Link to={`/main/catalogo/${deployment.id}/revisao`} className={primaryButtonClass}>Revisar ativação<ArrowRight className="size-4" /></Link> : null}</div>} />
     <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto"><div className="mx-auto w-full max-w-[1280px] px-5 py-6 sm:px-8 lg:px-10 lg:py-8">
       <section className="mb-6 flex flex-col gap-4 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"><div><div className="flex flex-wrap items-center gap-3"><StatusBadge status={deployment.status} /><span className="text-xs text-slate-400">ID {deployment.id.slice(0, 8)}</span>{deployment.flowMode === 'hub_banco_only' ? <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Hub + Banco Único</span> : null}</div><h1 className="mt-3 text-2xl font-semibold tracking-[-0.035em] text-slate-950">{deployment.status === 'awaiting_activation' ? 'Tudo pronto para a ativação' : deployment.status === 'completed' ? deployment.flowMode === 'hub_banco_only' ? 'Carga concluída no Hub e Banco Único' : 'Catálogo ativo' : processingStatuses.includes(deployment.status) ? statusLabel(deployment.status) : 'Acompanhamento da implantação'}</h1><p className="mt-1 text-sm text-slate-500">Solicitado por {deployment.requestedBy} em {formatDate(deployment.createdAt)}.</p></div><div className="flex gap-3">{deployment.retryable ? <button type="button" onClick={() => void handleDeploymentAction('retry')} disabled={busyAction === 'retry'} className={secondaryButtonClass}>{busyAction === 'retry' ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Tentar novamente</button> : null}{canCancel ? <button type="button" onClick={() => setShowCancel(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"><Ban className="size-4" />Cancelar</button> : null}</div></section>
       {actionMessage ? <div role="status" className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{actionMessage}</div> : null}
@@ -162,5 +202,6 @@ export default function CatalogDeploymentDetailsPage() {
       <section className="mt-6 grid gap-4 sm:grid-cols-3"><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><Server className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Seller no Hub</p><p className="mt-1 truncate font-mono text-sm font-semibold text-slate-800">{deployment.hubSellerId || 'Ainda não criado'}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Boxes className="size-4" /></span><p className="mt-4 text-xs text-slate-500">{deployment.flowMode === 'hub_banco_only' ? 'Cobertura Banco Único' : 'Imagens confirmadas'}</p><p className="mt-1 text-sm font-semibold text-slate-800">{deployment.flowMode === 'hub_banco_only' ? `${Math.min(...deployment.units.map((unit) => unit.coveragePercent ?? 0)).toFixed(1)}%` : `${deployment.assets.filter((asset) => asset.status === 'confirmed').length} de ${deployment.assets.length}`}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Activity className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Última atualização</p><p className="mt-1 text-sm font-semibold text-slate-800">{formatDate(deployment.updatedAt)}</p></div></section>
     </div></main>
     {showCancel ? <ConfirmDialog title="Cancelar esta implantação?" description="O processamento será interrompido. Recursos externos já criados no Hub, Unicommerce ou Banco Único não serão excluídos." confirmText="Cancelar implantação" cancelText="Manter processamento" tone="danger" loading={busyAction === 'cancel'} onClose={() => setShowCancel(false)} onConfirm={() => void handleDeploymentAction('cancel')} /> : null}
+    {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}
   </CatalogScreen>;
 }

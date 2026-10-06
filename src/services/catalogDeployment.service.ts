@@ -186,6 +186,12 @@ export interface DeploymentError {
   action: string | null;
 }
 
+export interface SellerAccessToken {
+  token: string;
+  hubSellerId: string;
+  header: 'X-API-Key';
+}
+
 export interface PaginatedDeployments {
   data: Deployment[];
   meta: { page: number; pageSize: number; totalItems: number; totalPages: number };
@@ -398,6 +404,16 @@ export async function listDeployments(params: { page?: number; pageSize?: number
 export async function getDeployment(id: string): Promise<Deployment> {
   if (!CATALOG_DEMO_MODE) return request(`/api/v1/deployments/${id}`);
   return mockUpdate(id, evolveMock);
+}
+
+export async function revealDeploymentSellerToken(id: string, requestedBy: string): Promise<SellerAccessToken> {
+  if (!CATALOG_DEMO_MODE) {
+    return request(`/api/v1/deployments/${id}/seller-token`, {
+      method: 'POST',
+      body: JSON.stringify({ requestedBy }),
+    }, true);
+  }
+  return { token: `hub_demo_${id.replace(/-/g, '').slice(0, 24)}`, hubSellerId: 'demo', header: 'X-API-Key' };
 }
 
 export async function createDeployment(payload: CreateDeploymentPayload): Promise<Deployment> {
