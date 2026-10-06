@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Database, Eye, EyeOff, Info, Loader2, LockKeyhole, Save, ShieldCheck, Store } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getDeployment, updateDeploymentUnit, type Deployment, type DeploymentUnit, type UpdateDeploymentUnitPayload } from '../../services/catalogDeployment.service';
+import { databaseConnectionErrorMessage, testDatabaseConnectionUrl } from '../../services/database.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, fieldClass, formatCnpj, labelClass, primaryButtonClass, secondaryButtonClass, StatusBadge } from './catalogUi';
 
@@ -17,6 +18,7 @@ type UnitForm = {
 };
 
 type FormErrors = Partial<Record<keyof UnitForm, string>>;
+type ConnectionCheck = { state: 'idle' | 'validating' | 'valid' | 'error'; credentialRef?: string; message?: string };
 
 const editableStatuses = new Set(['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required']);
 
@@ -96,6 +98,7 @@ export default function EditCatalogDeploymentPage() {
   const [submitError, setSubmitError] = useState('');
   const [saved, setSaved] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
+  const [connectionCheck, setConnectionCheck] = useState<ConnectionCheck>({ state: 'idle' });
 
   const load = useCallback(async () => {
     if (!deploymentId) return;
@@ -108,6 +111,7 @@ export default function EditCatalogDeploymentPage() {
         || result.units[0];
       setSelectedId(preferred?.id || '');
       setForm(preferred ? formFromUnit(preferred) : null);
+      setConnectionCheck({ state: 'idle' });
       setLoadError('');
     } catch (caught) {
       setLoadError(caught instanceof Error ? caught.message : 'Não foi possível carregar a implantação.');
@@ -129,18 +133,41 @@ export default function EditCatalogDeploymentPage() {
     setSubmitError('');
     setSaved(false);
     setShowCredential(false);
+    setConnectionCheck({ state: 'idle' });
   }
 
   function change<K extends keyof UnitForm>(field: K, value: UnitForm[K]) {
     setForm((current) => current ? { ...current, [field]: value } : current);
     setErrors((current) => ({ ...current, [field]: undefined }));
+    if (field === 'credentialRef') setConnectionCheck({ state: 'idle' });
     setSaved(false);
+  }
+
+  async function validateConnection() {
+    if (!form) return;
+    const credentialRef = form.credentialRef.trim();
+    setConnectionCheck({ state: 'validating', credentialRef });
+    setErrors((current) => ({ ...current, credentialRef: undefined }));
+    try {
+      const result = await testDatabaseConnectionUrl(credentialRef, form.cnpj);
+      setConnectionCheck((current) => current.state === 'validating' && current.credentialRef === credentialRef
+        ? { state: 'valid', credentialRef, message: `${result.message} (${result.latencyMs} ms)` }
+        : current);
+    } catch (caught) {
+      setConnectionCheck((current) => current.state === 'validating' && current.credentialRef === credentialRef
+        ? { state: 'error', credentialRef, message: databaseConnectionErrorMessage(caught) }
+        : current);
+    }
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!deployment || !unit || !form || !canEdit) return;
     const nextErrors = validate(form, unit, identityLocked, sourceLocked);
+    if (form.credentialRef.trim()
+      && (connectionCheck.state !== 'valid' || connectionCheck.credentialRef !== form.credentialRef.trim())) {
+      nextErrors.credentialRef = 'Valide a nova conexão com o banco antes de salvar.';
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
     const payload: UpdateDeploymentUnitPayload = {
@@ -150,7 +177,7 @@ export default function EditCatalogDeploymentPage() {
       ...(!identityLocked && form.cnpj.replace(/\D/g, '') !== unit.cnpj ? { cnpj: form.cnpj.replace(/\D/g, '') } : {}),
       ...(!sourceLocked && Number(form.sourceUnitId) !== unit.sourceUnitId ? { sourceUnitId: Number(form.sourceUnitId) } : {}),
       ...(form.credentialRef.trim() ? { credentialRef: form.credentialRef.trim() } : {}),
-      ...(form.orderWebhookUrl.trim() ? { orderWebhookUrl: form.orderWebhookUrl.trim() } : {}),
+      ...(deployment.flowMode === 'full' && form.orderWebhookUrl.trim() ? { orderWebhookUrl: form.orderWebhookUrl.trim() } : {}),
       pageSize: Number(form.pageSize),
       validEanDropThresholdBps: Number(form.validEanDropThresholdBps),
     };
@@ -161,6 +188,7 @@ export default function EditCatalogDeploymentPage() {
       const updatedUnit = updated.units.find((item) => item.id === unit.id);
       setDeployment(updated);
       setForm(updatedUnit ? formFromUnit(updatedUnit) : form);
+      setConnectionCheck({ state: 'idle' });
       setSaved(true);
     } catch (caught) {
       setSubmitError(caught instanceof Error ? caught.message : 'Não foi possível salvar as correções.');
@@ -198,11 +226,11 @@ export default function EditCatalogDeploymentPage() {
           <section className="rounded-xl border border-[#dbe3ef] bg-white">
             <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-primary"><Database className="size-5" /></span><div><h2 className="text-base font-semibold text-slate-950">Conexão e carga</h2><p className="mt-1 text-sm leading-6 text-slate-500">Esses dados podem ser corrigidos mesmo quando a integração já existe.</p></div></div></div>
             <div className="grid gap-5 px-5 py-6 sm:grid-cols-2 sm:px-6">
-              <label className={`${labelClass} sm:col-span-2`}>Nova conexão PostgreSQL <span className="font-normal text-slate-400">(opcional)</span><div className="relative"><input value={form.credentialRef} onChange={(event) => change('credentialRef', event.target.value)} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredential ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} disabled={!canEdit} placeholder={unit.hasCredential ? 'Deixe em branco para manter a conexão atual' : 'postgresql://usuario:senha@host:5432/database'} aria-invalid={Boolean(errors.credentialRef)} /><button type="button" onClick={() => setShowCredential((current) => !current)} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary" aria-label={showCredential ? 'Ocultar conexão' : 'Mostrar conexão'} disabled={!canEdit}>{showCredential ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasCredential ? 'Existe uma conexão protegida. Por segurança, ela não é exibida.' : 'Nenhuma conexão foi configurada.'} Caracteres especiais da senha precisam estar codificados na URL.</p><FieldError message={errors.credentialRef} /></label>
-              <label className={`${labelClass} sm:col-span-2`}>Novo webhook de pedidos <span className="font-normal text-slate-400">(opcional)</span><input value={form.orderWebhookUrl} onChange={(event) => change('orderWebhookUrl', event.target.value)} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={!canEdit} placeholder={unit.hasOrderWebhookUrl ? 'Deixe em branco para manter o webhook atual' : 'https://api.exemplo.com/webhooks/pedidos'} aria-invalid={Boolean(errors.orderWebhookUrl)} /><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasOrderWebhookUrl ? 'Existe um webhook protegido. Por segurança, ele não é exibido.' : 'Nenhum webhook foi configurado.'}</p><FieldError message={errors.orderWebhookUrl} /></label>
+              <label className={`${labelClass} sm:col-span-2`}>Nova conexão PostgreSQL <span className="font-normal text-slate-400">(opcional; validação obrigatória quando preenchida)</span><div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={form.credentialRef} onChange={(event) => change('credentialRef', event.target.value)} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredential ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} disabled={!canEdit} placeholder={unit.hasCredential ? 'Deixe em branco para manter a conexão atual' : 'postgresql://usuario:senha@host:5432/database'} aria-invalid={Boolean(errors.credentialRef)} /><button type="button" onClick={() => setShowCredential((current) => !current)} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary" aria-label={showCredential ? 'Ocultar conexão' : 'Mostrar conexão'} disabled={!canEdit}>{showCredential ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection()} disabled={!canEdit || connectionCheck.state === 'validating' || !form.credentialRef.trim()} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasCredential ? 'Existe uma conexão protegida. Por segurança, ela não é exibida.' : 'Nenhuma conexão foi configurada.'} O teste da nova URL é executado pelo servidor autorizado a acessar os bancos.</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors.credentialRef} /></label>
+              {deployment.flowMode === 'full' ? <label className={`${labelClass} sm:col-span-2`}>Novo webhook de pedidos <span className="font-normal text-slate-400">(opcional)</span><input value={form.orderWebhookUrl} onChange={(event) => change('orderWebhookUrl', event.target.value)} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={!canEdit} placeholder={unit.hasOrderWebhookUrl ? 'Deixe em branco para manter o webhook atual' : 'https://api.exemplo.com/webhooks/pedidos'} aria-invalid={Boolean(errors.orderWebhookUrl)} /><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasOrderWebhookUrl ? 'Existe um webhook protegido. Por segurança, ele não é exibido.' : 'Nenhum webhook foi configurado.'}</p><FieldError message={errors.orderWebhookUrl} /></label> : null}
               <label className={labelClass}>Itens por página<input value={form.pageSize} onChange={(event) => change('pageSize', event.target.value)} className={fieldClass} type="number" min={1} max={500} disabled={!canEdit} aria-invalid={Boolean(errors.pageSize)} /><FieldError message={errors.pageSize} /></label>
               <label className={labelClass}>Limite de queda de EAN (bps)<input value={form.validEanDropThresholdBps} onChange={(event) => change('validEanDropThresholdBps', event.target.value)} className={fieldClass} type="number" min={0} max={10000} disabled={!canEdit} aria-invalid={Boolean(errors.validEanDropThresholdBps)} /><FieldError message={errors.validEanDropThresholdBps} /></label>
-              <div className="flex gap-3 rounded-lg bg-blue-50 p-4 text-xs leading-5 text-blue-800 sm:col-span-2"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" /><p>Conexão e webhook são enviados de forma protegida e nunca aparecem na resposta da API, na linha do tempo ou nos logs da implantação.</p></div>
+              <div className="flex gap-3 rounded-lg bg-blue-50 p-4 text-xs leading-5 text-blue-800 sm:col-span-2"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" /><p>{deployment.flowMode === 'full' ? 'Conexão e webhook são enviados de forma protegida e nunca aparecem na resposta da API, na linha do tempo ou nos logs da implantação.' : 'A conexão é enviada de forma protegida e usada somente para a carga no Hub.'}</p></div>
             </div>
           </section>
 

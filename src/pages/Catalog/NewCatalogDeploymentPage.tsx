@@ -2,11 +2,13 @@ import { useMemo, useState } from 'react';
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Eye, EyeOff, FileImage, ImagePlus, Info, Loader2, Plus, Trash2, UploadCloud } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createDeployment, startDeployment, uploadDeploymentAsset, type AssetType, type Deployment, type GroupForm, type UnitForm } from '../../services/catalogDeployment.service';
+import { databaseConnectionErrorMessage, testDatabaseConnectionUrl } from '../../services/database.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, fieldClass, formatCnpj, labelClass, primaryButtonClass, secondaryButtonClass } from './catalogUi';
 
 type FormErrors = Record<string, string>;
 type UploadState = Record<AssetType, { state: 'idle' | 'uploading' | 'confirmed' | 'error'; fileName?: string; preview?: string; message?: string }>;
+type ConnectionCheck = { state: 'idle' | 'validating' | 'valid' | 'error'; credentialRef?: string; message?: string };
 
 const assetDefinitions: Array<{ type: AssetType; label: string; hint: string }> = [
   { type: 'banner_1', label: 'Banner principal', hint: 'Imagem de destaque 1' },
@@ -51,7 +53,7 @@ function validateGroup(group: GroupForm) {
   return errors;
 }
 
-function validateUnits(units: UnitForm[]) {
+function validateUnits(units: UnitForm[], connectionChecks: Record<number, ConnectionCheck>, hubOnly = false) {
   const errors: FormErrors = {};
   const codes = new Set<string>();
   const sourceIds = new Set<number>();
@@ -75,16 +77,22 @@ function validateUnits(units: UnitForm[]) {
     } catch {
       errors[`${prefix}-credential`] = 'Use uma URL PostgreSQL completa e válida.';
     }
-    if (!unit.orderWebhookUrl.trim()) {
-      errors[`${prefix}-webhook`] = 'Informe a URL HTTPS que receberá os pedidos.';
-    } else if (unit.orderWebhookUrl.trim().length > 2048) {
-      errors[`${prefix}-webhook`] = 'Use no máximo 2048 caracteres.';
-    } else {
-      try {
-        const url = new URL(unit.orderWebhookUrl.trim());
-        if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) throw new Error();
-      } catch {
-        errors[`${prefix}-webhook`] = 'Use uma URL válida iniciada por https://, sem usuário ou senha.';
+    const connectionCheck = connectionChecks[index];
+    if (connectionCheck?.state !== 'valid' || connectionCheck.credentialRef !== unit.credentialRef.trim()) {
+      errors[`${prefix}-connection`] = 'Valide a conexão com o banco antes de prosseguir.';
+    }
+    if (!hubOnly) {
+      if (!unit.orderWebhookUrl.trim()) {
+        errors[`${prefix}-webhook`] = 'Informe a URL HTTPS que receberá os pedidos.';
+      } else if (unit.orderWebhookUrl.trim().length > 2048) {
+        errors[`${prefix}-webhook`] = 'Use no máximo 2048 caracteres.';
+      } else {
+        try {
+          const url = new URL(unit.orderWebhookUrl.trim());
+          if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) throw new Error();
+        } catch {
+          errors[`${prefix}-webhook`] = 'Use uma URL válida iniciada por https://, sem usuário ou senha.';
+        }
       }
     }
     if (!Number.isInteger(Number(unit.pageSize)) || Number(unit.pageSize) < 1 || Number(unit.pageSize) > 500) errors[`${prefix}-pageSize`] = 'Use um valor entre 1 e 500.';
@@ -97,8 +105,8 @@ function FieldError({ message }: { message?: string }) {
   return message ? <p className="mt-1.5 text-xs font-medium text-rose-600">{message}</p> : null;
 }
 
-function Stepper({ step }: { step: number }) {
-  const steps = ['Grupo', 'Unidades', 'Identidade visual'];
+function Stepper({ step, hubOnly }: { step: number; hubOnly: boolean }) {
+  const steps = ['Grupo', 'Unidades', hubOnly ? 'Revisão' : 'Identidade visual'];
   return <ol className="grid grid-cols-3 border-b border-[#dbe3ef] bg-white px-5 sm:px-8">{steps.map((label, index) => { const number = index + 1; const done = number < step; const active = number === step; return <li key={label} className={`relative flex items-center gap-2.5 py-4 text-xs font-semibold sm:text-sm ${active ? 'text-primary' : done ? 'text-emerald-700' : 'text-slate-400'}`}><span className={`flex size-7 shrink-0 items-center justify-center rounded-full border text-xs ${active ? 'border-primary bg-primary text-white' : done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>{done ? <Check className="size-3.5" /> : number}</span><span className="hidden sm:inline">{label}</span>{active ? <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" /> : null}</li>; })}</ol>;
 }
 
@@ -108,10 +116,12 @@ export default function NewCatalogDeploymentPage() {
   const requestedBy = session?.username || session?.authUsername || 'Operador Unico';
   const [step, setStep] = useState(1);
   const [group, setGroup] = useState<GroupForm>({ cnpj: '', nome: '', username: '' });
+  const [hubOnly, setHubOnly] = useState(false);
   const [units, setUnits] = useState<UnitForm[]>([newUnit()]);
   const [errors, setErrors] = useState<FormErrors>({});
   const [expanded, setExpanded] = useState(0);
   const [showCredentials, setShowCredentials] = useState<Record<number, boolean>>({});
+  const [connectionChecks, setConnectionChecks] = useState<Record<number, ConnectionCheck>>({});
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -124,7 +134,40 @@ export default function NewCatalogDeploymentPage() {
 
   function changeUnit(index: number, patch: Partial<UnitForm>) {
     setUnits((current) => current.map((unit, unitIndex) => unitIndex === index ? { ...unit, ...patch } : unit));
+    if (patch.credentialRef !== undefined) {
+      setConnectionChecks((current) => ({ ...current, [index]: { state: 'idle' } }));
+    }
     setErrors({});
+  }
+
+  async function validateConnection(index: number) {
+    const unit = units[index];
+    if (!unit) return;
+    const credentialRef = unit.credentialRef.trim();
+    setConnectionChecks((current) => ({ ...current, [index]: { state: 'validating', credentialRef } }));
+    setErrors((current) => ({ ...current, [`unit-${index}-credential`]: '', [`unit-${index}-connection`]: '' }));
+    try {
+      const result = await testDatabaseConnectionUrl(credentialRef, unit.cnpj);
+      setConnectionChecks((current) => current[index]?.state === 'validating' && current[index]?.credentialRef === credentialRef
+        ? { ...current, [index]: { state: 'valid', credentialRef, message: `${result.message} (${result.latencyMs} ms)` } }
+        : current);
+    } catch (caught) {
+      setConnectionChecks((current) => current[index]?.state === 'validating' && current[index]?.credentialRef === credentialRef
+        ? { ...current, [index]: { state: 'error', credentialRef, message: databaseConnectionErrorMessage(caught) } }
+        : current);
+    }
+  }
+
+  function removeUnit(index: number) {
+    setUnits((current) => {
+      const remaining = current.filter((_, unitIndex) => unitIndex !== index);
+      if (!remaining.some((item) => item.initial) && remaining[0]) remaining[0] = { ...remaining[0], initial: true };
+      return remaining;
+    });
+    setConnectionChecks((current) => Object.fromEntries(Object.entries(current)
+      .filter(([key]) => Number(key) !== index)
+      .map(([key, value]) => [Number(key) > index ? Number(key) - 1 : Number(key), value])));
+    setExpanded(0);
   }
 
   function chooseInitial(index: number) {
@@ -140,7 +183,7 @@ export default function NewCatalogDeploymentPage() {
 
   async function createDraft(event: React.FormEvent) {
     event.preventDefault();
-    const nextErrors = validateUnits(units);
+    const nextErrors = validateUnits(units, connectionChecks, hubOnly);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
       const firstIndex = Number(Object.keys(nextErrors).find((key) => key.startsWith('unit-'))?.split('-')[1] ?? 0);
@@ -151,7 +194,7 @@ export default function NewCatalogDeploymentPage() {
     setSubmitError('');
     try {
       const normalizedUnits = units.map((unit, index) => ({ ...unit, codigo: unit.codigo.trim(), nome: unit.nome.trim(), cnpj: unit.cnpj.replace(/\D/g, ''), sourceUnitId: Number(unit.sourceUnitId), credentialRef: unit.credentialRef.trim(), orderWebhookUrl: unit.orderWebhookUrl.trim(), pageSize: Number(unit.pageSize), validEanDropThresholdBps: Number(unit.validEanDropThresholdBps), initial: units.some((item) => item.initial) ? unit.initial : index === 0 }));
-      const created = await createDeployment({ requestedBy, group: { ...group, cnpj: group.cnpj.replace(/\D/g, ''), nome: group.nome.trim(), username: group.username.trim() }, units: normalizedUnits });
+      const created = await createDeployment({ requestedBy, flowMode: hubOnly ? 'hub_banco_only' : 'full', group: { ...group, cnpj: group.cnpj.replace(/\D/g, ''), nome: group.nome.trim(), username: group.username.trim() }, units: normalizedUnits.map((unit) => hubOnly ? { ...unit, orderWebhookUrl: '' } : unit) });
       setDeployment(created);
       setStep(3);
     } catch (caught) {
@@ -183,7 +226,7 @@ export default function NewCatalogDeploymentPage() {
   }
 
   async function handleStart() {
-    if (!deployment || !allConfirmed) return;
+    if (!deployment || (!hubOnly && !allConfirmed)) return;
     setStarting(true);
     setSubmitError('');
     try {
@@ -197,8 +240,8 @@ export default function NewCatalogDeploymentPage() {
 
   return (
     <CatalogScreen>
-      <CatalogPageHeader title="Novo catálogo" description="Configure o grupo, as unidades e a identidade visual." backTo="/main/catalogo" />
-      <Stepper step={step} />
+      <CatalogPageHeader title="Novo catálogo" description={hubOnly ? 'Configure uma carga no Hub e Banco Único.' : 'Configure o grupo, as unidades e a identidade visual.'} backTo="/main/catalogo" />
+      <Stepper step={step} hubOnly={hubOnly} />
       <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto grid w-full max-w-[1200px] gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:px-10 lg:py-8">
           <section>
@@ -208,6 +251,7 @@ export default function NewCatalogDeploymentPage() {
                 <label className={labelClass}>CNPJ do grupo<input value={group.cnpj} onChange={(event) => { setGroup({ ...group, cnpj: formatCnpj(event.target.value) }); setErrors({}); }} className={fieldClass} inputMode="numeric" placeholder="00.000.000/0000-00" aria-invalid={Boolean(errors.groupCnpj)} /><FieldError message={errors.groupCnpj} /></label>
                 <label className={labelClass}>Nome do grupo<input value={group.nome} onChange={(event) => { setGroup({ ...group, nome: event.target.value }); setErrors({}); }} className={fieldClass} maxLength={255} placeholder="Ex.: Rede Saúde" aria-invalid={Boolean(errors.groupName)} /><FieldError message={errors.groupName} /></label>
                 <label className={`${labelClass} sm:col-span-2`}>Usuário de acesso<div className="relative"><span className="absolute left-3.5 top-1/2 mt-1 -translate-y-1/2 text-sm text-slate-400">@</span><input value={group.username} onChange={(event) => { setGroup({ ...group, username: event.target.value }); setErrors({}); }} className={`${fieldClass} pl-8`} maxLength={50} placeholder="rede-saude" autoCapitalize="none" aria-invalid={Boolean(errors.username)} /></div><p className="mt-1.5 text-xs text-slate-500">Letras, números, ponto, hífen e sublinhado. Não use espaços.</p><FieldError message={errors.username} /></label>
+                <label className="sm:col-span-2 flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4"><span><span className="block text-sm font-semibold text-slate-900">Somente Hub + Banco Único</span><span className="mt-1 block text-xs leading-5 text-slate-500">Cria e valida o catálogo no Hub, publica os itens ausentes no Banco Único e não cria tenant, imagens ou storefront.</span></span><span className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${hubOnly ? 'bg-primary' : 'bg-slate-300'}`}><input type="checkbox" checked={hubOnly} onChange={(event) => setHubOnly(event.target.checked)} className="sr-only" /><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition ${hubOnly ? 'left-6' : 'left-1'}`} /></span></label>
               </div>
               <div className="flex justify-end border-t border-[#dbe3ef] px-5 py-4 sm:px-6"><button type="submit" className={primaryButtonClass}>Continuar para unidades</button></div>
             </form> : null}
@@ -215,9 +259,11 @@ export default function NewCatalogDeploymentPage() {
             {step === 2 ? <form onSubmit={(event) => void createDraft(event)}>
               <div className="rounded-xl border border-[#dbe3ef] bg-white">
                 <div className="flex items-start justify-between gap-4 border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><div><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 2 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Unidades da implantação</h2><p className="mt-1 text-sm leading-6 text-slate-500">Informe a origem dos produtos de cada unidade Alpha7.</p></div><button type="button" onClick={() => { setUnits((current) => [...current, newUnit(current.length)]); setExpanded(units.length); }} className={`${secondaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Adicionar unidade</span></button></div>
+                <label className="m-5 flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-blue-200 bg-blue-50 p-4 sm:mx-6"><span><span className="block text-sm font-semibold text-blue-950">Subir somente catálogo</span><span className="mt-1 block text-xs leading-5 text-blue-800">Hub Único + Banco Único, sem criar Unicommerce, imagens ou Vercel.</span></span><span className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${hubOnly ? 'bg-primary' : 'bg-slate-300'}`}><input type="checkbox" checked={hubOnly} onChange={(event) => setHubOnly(event.target.checked)} className="sr-only" /><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition ${hubOnly ? 'left-6' : 'left-1'}`} /></span></label>
                 {errors.units ? <div className="m-5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{errors.units}</div> : null}
                 <div className="divide-y divide-[#dbe3ef]">{units.map((unit, index) => {
                   const isOpen = expanded === index;
+                  const connectionCheck = connectionChecks[index] || { state: 'idle' as const };
                   return <article key={index}>
                     <button type="button" onClick={() => setExpanded(isOpen ? -1 : index)} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 sm:px-6"><span className="flex min-w-0 items-center gap-3"><span className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold ${unit.initial ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-900">{unit.nome || `Unidade ${index + 1}`}</span><span className="mt-0.5 block text-xs text-slate-500">{unit.codigo || 'Código pendente'}{unit.initial ? ' · Unidade inicial' : ''}</span></span></span>{isOpen ? <ChevronUp className="size-4 text-slate-400" /> : <ChevronDown className="size-4 text-slate-400" />}</button>
                     {isOpen ? <div className="grid gap-5 bg-slate-50/70 px-5 py-5 sm:grid-cols-2 sm:px-6">
@@ -226,11 +272,11 @@ export default function NewCatalogDeploymentPage() {
                       <label className={labelClass}>Slug do tenant<input value={unit.slug || ''} onChange={(event) => changeUnit(index, { slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} className={fieldClass} maxLength={100} placeholder="whatsapp-rede-saude" /><p className="mt-1.5 text-xs text-slate-500">Opcional; quando informado, será preservado exatamente.</p><FieldError message={errors[`unit-${index}-slug`]} /></label>
                       <label className={labelClass}>CNPJ da unidade<input value={unit.cnpj} onChange={(event) => changeUnit(index, { cnpj: formatCnpj(event.target.value) })} className={fieldClass} inputMode="numeric" placeholder="00.000.000/0000-00" /><FieldError message={errors[`unit-${index}-cnpj`]} /></label>
                       <label className={labelClass}>ID da unidade no Alpha7<input value={unit.sourceUnitId} onChange={(event) => changeUnit(index, { sourceUnitId: Number(event.target.value) })} className={fieldClass} type="number" min={1} step={1} /><FieldError message={errors[`unit-${index}-source`]} /></label>
-                      <label className={`${labelClass} sm:col-span-2`}>Conexão PostgreSQL<div className="relative"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[index] ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="postgresql://usuario:senha@host:5432/database" /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [index]: !current[index] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[index] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[index] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">Codifique caracteres especiais do usuário e senha, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p><FieldError message={errors[`unit-${index}-credential`]} /></label>
-                      <label className={`${labelClass} sm:col-span-2`}>Webhook de pedidos<input value={unit.orderWebhookUrl} onChange={(event) => changeUnit(index, { orderWebhookUrl: event.target.value })} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="url" spellCheck={false} placeholder="https://api.exemplo.com/webhooks/pedidos" aria-invalid={Boolean(errors[`unit-${index}-webhook`])} /><p className="mt-1.5 text-xs leading-5 text-slate-500">URL HTTPS que receberá os pedidos feitos para esta unidade.</p><FieldError message={errors[`unit-${index}-webhook`]} /></label>
+                      <label className={`${labelClass} sm:col-span-2`}>Conexão PostgreSQL <span className="font-normal text-rose-600">(validação obrigatória)</span><div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[index] ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="postgresql://usuario:senha@host:5432/database" aria-invalid={Boolean(errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`])} /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [index]: !current[index] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[index] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[index] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection(index)} disabled={connectionCheck.state === 'validating'} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">O teste é executado pelo servidor autorizado a acessar os bancos. Codifique caracteres especiais, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`]} /></label>
+                      {!hubOnly ? <label className={`${labelClass} sm:col-span-2`}>Webhook de pedidos<input value={unit.orderWebhookUrl} onChange={(event) => changeUnit(index, { orderWebhookUrl: event.target.value })} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="url" spellCheck={false} placeholder="https://api.exemplo.com/webhooks/pedidos" aria-invalid={Boolean(errors[`unit-${index}-webhook`])} /><p className="mt-1.5 text-xs leading-5 text-slate-500">URL HTTPS que receberá os pedidos feitos para esta unidade.</p><FieldError message={errors[`unit-${index}-webhook`]} /></label> : null}
                       <label className={labelClass}>Itens por página<input value={unit.pageSize} onChange={(event) => changeUnit(index, { pageSize: Number(event.target.value) })} className={fieldClass} type="number" min={1} max={500} /><FieldError message={errors[`unit-${index}-pageSize`]} /></label>
                       <label className={labelClass}>Limite de queda de EAN (bps)<input value={unit.validEanDropThresholdBps} onChange={(event) => changeUnit(index, { validEanDropThresholdBps: Number(event.target.value) })} className={fieldClass} type="number" min={0} max={10000} /><FieldError message={errors[`unit-${index}-threshold`]} /></label>
-                      <div className="flex items-center justify-between gap-4 sm:col-span-2"><label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="radio" name="initial-unit" checked={unit.initial === true} onChange={() => chooseInitial(index)} className="size-4 accent-[#145efc]" />Unidade inicial do grupo</label>{units.length > 1 ? <button type="button" onClick={() => { setUnits((current) => { const remaining = current.filter((_, unitIndex) => unitIndex !== index); if (!remaining.some((item) => item.initial) && remaining[0]) remaining[0] = { ...remaining[0], initial: true }; return remaining; }); setExpanded(0); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700"><Trash2 className="size-3.5" />Remover</button> : null}</div>
+                      <div className="flex items-center justify-between gap-4 sm:col-span-2"><label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="radio" name="initial-unit" checked={unit.initial === true} onChange={() => chooseInitial(index)} className="size-4 accent-[#145efc]" />Unidade inicial do grupo</label>{units.length > 1 ? <button type="button" onClick={() => removeUnit(index)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700"><Trash2 className="size-3.5" />Remover</button> : null}</div>
                     </div> : null}
                   </article>;
                 })}</div>
@@ -238,7 +284,13 @@ export default function NewCatalogDeploymentPage() {
               </div>
             </form> : null}
 
-            {step === 3 && deployment ? <div className="rounded-xl border border-[#dbe3ef] bg-white">
+            {step === 3 && deployment && hubOnly ? <div className="rounded-xl border border-[#dbe3ef] bg-white">
+              <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 3 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Revisar e iniciar</h2><p className="mt-1 text-sm leading-6 text-slate-500">A execução será assíncrona e poderá levar alguns minutos.</p></div>
+              <div className="space-y-4 p-5 sm:p-6"><div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-4 text-sm leading-6 text-blue-900"><p className="font-semibold">Hub Único + Banco Único</p><p className="mt-1">Serão criadas {units.length} {units.length === 1 ? 'unidade' : 'unidades'} no Hub. Após a carga ser validada, os produtos ausentes serão enviados ao Banco Único. Nenhum tenant ou storefront será criado.</p></div><p className="text-sm text-slate-500">Depois de iniciar, mantenha a página de acompanhamento aberta. Ela consultará o mesmo run automaticamente a cada minuto.</p></div>
+              <div className="flex flex-col-reverse gap-3 border-t border-[#dbe3ef] px-5 py-4 sm:flex-row sm:justify-end sm:px-6"><Link to={`/main/catalogo/${deployment.id}`} className={secondaryButtonClass}>Continuar depois</Link><button type="button" onClick={() => void handleStart()} disabled={starting} className={primaryButtonClass}>{starting ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}{starting ? 'Iniciando…' : 'Iniciar Hub + Banco Único'}</button></div>
+            </div> : null}
+
+            {step === 3 && deployment && !hubOnly ? <div className="rounded-xl border border-[#dbe3ef] bg-white">
               <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 3 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Identidade visual</h2><p className="mt-1 text-sm leading-6 text-slate-500">Envie os oito assets obrigatórios para desktop e mobile. O upload é feito diretamente para o storage seguro.</p></div>
               <div className="m-5 flex gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800 sm:m-6"><Info className="mt-0.5 size-4 shrink-0" /><p>O rascunho foi criado. Os dados não podem ser editados nesta etapa; para alterá-los, cancele e crie uma nova implantação.</p></div>
               <div className="grid gap-4 px-5 pb-6 sm:grid-cols-2 sm:px-6 lg:grid-cols-3">{assetDefinitions.map(({ type, label, hint }) => {
@@ -259,8 +311,8 @@ export default function NewCatalogDeploymentPage() {
 
           <aside className="h-fit rounded-xl border border-[#dbe3ef] bg-white p-5 lg:sticky lg:top-6">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Resumo</p><h2 className="mt-2 text-lg font-semibold tracking-[-0.025em] text-slate-950">{groupSummary}</h2><p className="mt-1 text-sm text-slate-500">{group.cnpj ? formatCnpj(group.cnpj) : 'CNPJ ainda não informado'}</p>
-            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Catálogo</dt><dd className="font-medium text-slate-800">Hub Único</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Publicação</dt><dd className="font-medium text-slate-800">Automática</dd></div></dl>
-            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500"><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>A ativação acontece automaticamente após os gates.</li></ol></div>
+            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Catálogo</dt><dd className="font-medium text-slate-800">Hub Único</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Fluxo</dt><dd className="font-medium text-slate-800">{hubOnly ? 'Somente catálogo' : 'Completo'}</dd></div></dl>
+            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500">{hubOnly ? <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>A carga é executada e validada no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>O run é consultado a cada minuto.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>Os itens ausentes seguem para o Banco Único.</li></> : <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>A ativação acontece após sua revisão.</li></>}</ol></div>
           </aside>
         </div>
       </main>

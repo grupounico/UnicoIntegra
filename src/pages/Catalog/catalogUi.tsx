@@ -16,18 +16,18 @@ const STATUS_LABELS: Record<DeploymentStatus | UnitStatus, string> = {
   waiting_storefront_release: 'Aguardando release da main',
   monitoring_timeout: 'Tempo de monitoramento excedido', reconciliation_required: 'Reconciliação necessária', cancelled: 'Cancelado',
   pending: 'Pendente', hub_unit_created: 'Unidade criada no Hub', integration_created: 'Integração criada', scheduled: 'Carga agendada',
-  running: 'Carga em andamento', shadow_ready: 'Snapshot pronto', catalog_active: 'Catálogo validado',
-  unicommerce_tenant_created: 'Tenant criado', unicommerce_ready: 'Unicommerce pronto', banco_unico_importing: 'Importando no Banco Único', active: 'Ativa',
+  running: 'Carga em andamento', shadow_ready: 'Snapshot pronto', activating_shadow: 'Ativando catálogo', catalog_active: 'Catálogo validado',
+  unicommerce_tenant_created: 'Tenant criado', unicommerce_ready: 'Unicommerce pronto', banco_unico_importing: 'Importando no Banco Único', banco_unico_ready: 'Hub e Banco Único prontos', active: 'Ativa',
 };
 
 type Tone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'orange';
 
 export function statusTone(status: DeploymentStatus | UnitStatus): Tone {
-  if (['completed', 'catalog_active', 'unicommerce_ready', 'active'].includes(status)) return 'success';
+  if (['completed', 'catalog_active', 'unicommerce_ready', 'banco_unico_ready', 'active'].includes(status)) return 'success';
   if (['failed'].includes(status)) return 'danger';
   if (['partially_failed', 'reconciliation_required'].includes(status)) return 'orange';
   if (['awaiting_activation', 'waiting_storefront_release', 'monitoring_timeout'].includes(status)) return 'warning';
-  if (['queued', 'scheduled', 'running', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'hub_unit_created', 'integration_created', 'shadow_ready', 'unicommerce_tenant_created', 'banco_unico_importing'].includes(status)) return 'info';
+  if (['queued', 'scheduled', 'running', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'hub_unit_created', 'integration_created', 'shadow_ready', 'activating_shadow', 'unicommerce_tenant_created', 'banco_unico_importing'].includes(status)) return 'info';
   return 'neutral';
 }
 

@@ -10,6 +10,8 @@ export type AssetType =
   | 'logo_desktop'
   | 'logo_mobile';
 
+export type CatalogFlowMode = 'full' | 'hub_banco_only';
+
 export type DeploymentStatus =
   | 'draft'
   | 'queued'
@@ -34,10 +36,12 @@ export type UnitStatus =
   | 'scheduled'
   | 'running'
   | 'shadow_ready'
+  | 'activating_shadow'
   | 'catalog_active'
   | 'unicommerce_tenant_created'
   | 'unicommerce_ready'
   | 'banco_unico_importing'
+  | 'banco_unico_ready'
   | 'awaiting_activation'
   | 'active'
   | 'failed'
@@ -109,6 +113,9 @@ export interface DeploymentUnit {
   unicommerceTenantId: string | null;
   clientId: number | null;
   bancoUnicoImportJobId: number | null;
+  coveragePercent?: number | null;
+  coveragePublished?: number | null;
+  coverageErrors?: number | null;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
   retryable: boolean;
@@ -149,6 +156,7 @@ export interface Deployment {
   groupCnpj: string;
   groupName: string;
   username: string;
+  flowMode: CatalogFlowMode;
   status: DeploymentStatus;
   currentStage: string | null;
   requestedBy: string;
@@ -185,6 +193,7 @@ export interface PaginatedDeployments {
 
 export interface CreateDeploymentPayload {
   requestedBy: string;
+  flowMode: CatalogFlowMode;
   group: GroupForm;
   units: UnitForm[];
 }
@@ -306,7 +315,7 @@ function demoDeployment(input: {
       ? ['draft', 'queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'importing_banco_unico', 'awaiting_activation']
       : ['draft', 'queued', 'provisioning_hub'];
   return {
-    id, idempotencyKey: uuid(), groupCnpj: input.cnpj, groupName: input.name, username: input.username,
+    id, idempotencyKey: uuid(), groupCnpj: input.cnpj, groupName: input.name, username: input.username, flowMode: 'full',
     status: input.status, currentStage: input.status, requestedBy: 'Operador Unico', correlationId: uuid(),
     hubSellerId: input.status === 'draft' ? null : String(900000 + input.ageHours),
     lastErrorCode: input.error?.code ?? null, lastErrorMessage: input.error?.message ?? null,
@@ -346,10 +355,12 @@ function writeMocks(deployments: Deployment[]) {
 function evolveMock(deployment: Deployment): Deployment {
   if (!deployment.startedAt || !['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'importing_banco_unico'].includes(deployment.status)) return deployment;
   const elapsed = (Date.now() - new Date(deployment.startedAt).getTime()) / 1000;
-  const next: DeploymentStatus = elapsed < 2 ? 'queued' : elapsed < 5 ? 'provisioning_hub' : elapsed < 8 ? 'validating_hub_catalog' : elapsed < 11 ? 'provisioning_unicommerce' : elapsed < 14 ? 'importing_banco_unico' : 'awaiting_activation';
+  const next: DeploymentStatus = deployment.flowMode === 'hub_banco_only'
+    ? elapsed < 2 ? 'queued' : elapsed < 5 ? 'provisioning_hub' : elapsed < 8 ? 'validating_hub_catalog' : elapsed < 14 ? 'importing_banco_unico' : 'completed'
+    : elapsed < 2 ? 'queued' : elapsed < 5 ? 'provisioning_hub' : elapsed < 8 ? 'validating_hub_catalog' : elapsed < 11 ? 'provisioning_unicommerce' : elapsed < 14 ? 'importing_banco_unico' : 'awaiting_activation';
   if (next === deployment.status) return deployment;
   const updated = { ...deployment, status: next, currentStage: next, updatedAt: new Date().toISOString() };
-  updated.units = deployment.units.map((unit) => ({ ...unit, status: next === 'awaiting_activation' ? 'awaiting_activation' : next === 'importing_banco_unico' ? 'banco_unico_importing' : next === 'provisioning_unicommerce' ? 'unicommerce_tenant_created' : 'running', latestValidRows: next === 'awaiting_activation' ? 13601 : unit.latestValidRows, unicommerceTenantId: next === 'awaiting_activation' ? `tenant-${unit.sourceUnitId}` : unit.unicommerceTenantId }));
+  updated.units = deployment.units.map((unit) => ({ ...unit, status: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 'banco_unico_ready' : next === 'awaiting_activation' ? 'awaiting_activation' : next === 'importing_banco_unico' ? 'banco_unico_importing' : next === 'provisioning_unicommerce' ? 'unicommerce_tenant_created' : 'running', latestValidRows: ['awaiting_activation', 'completed'].includes(next) ? 13601 : unit.latestValidRows, coveragePercent: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 100 : unit.coveragePercent, unicommerceTenantId: next === 'awaiting_activation' ? `tenant-${unit.sourceUnitId}` : unit.unicommerceTenantId }));
   updated.events = [...deployment.events, { id: uuid(), deploymentId: deployment.id, unitId: null, eventType: `deployment_${next}`, fromStatus: deployment.status, toStatus: next, createdBy: 'Sistema', createdAt: new Date().toISOString() }];
   return updated;
 }
@@ -395,10 +406,10 @@ export async function createDeployment(payload: CreateDeploymentPayload): Promis
   const now = new Date().toISOString();
   const deployment: Deployment = {
     id, idempotencyKey: uuid(), groupCnpj: payload.group.cnpj.replace(/\D/g, ''), groupName: payload.group.nome,
-    username: payload.group.username, status: 'draft', currentStage: null, requestedBy: payload.requestedBy,
+    username: payload.group.username, flowMode: payload.flowMode, status: 'draft', currentStage: null, requestedBy: payload.requestedBy,
     correlationId: uuid(), hubSellerId: null, lastErrorCode: null, lastErrorMessage: null, retryable: false,
     startedAt: null, finishedAt: null, activatedAt: null, activatedBy: null, createdAt: now, updatedAt: now,
-    units: payload.units.map((unit) => makeUnit(id, unit)), assets: assetsFor(id),
+    units: payload.units.map((unit) => makeUnit(id, unit)), assets: payload.flowMode === 'full' ? assetsFor(id) : [],
     events: [{ id: uuid(), deploymentId: id, unitId: null, eventType: 'deployment_created', fromStatus: null, toStatus: 'draft', createdBy: payload.requestedBy, createdAt: now }],
   };
   const deployments = readMocks();
@@ -471,6 +482,11 @@ export async function uploadDeploymentAsset(deploymentId: string, type: AssetTyp
 export async function startDeployment(id: string, requestedBy: string) {
   if (!CATALOG_DEMO_MODE) return request<Deployment>(`/api/v1/deployments/${id}/start`, { method: 'POST', body: JSON.stringify({ requestedBy }) }, true);
   return mockUpdate(id, (deployment) => ({ ...deployment, status: 'queued', currentStage: 'queued', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), events: [...deployment.events, { id: uuid(), deploymentId: id, unitId: null, eventType: 'deployment_queued', fromStatus: deployment.status, toStatus: 'queued', createdBy: requestedBy, createdAt: new Date().toISOString() }] }));
+}
+
+export async function refreshDeploymentRuns(id: string) {
+  if (!CATALOG_DEMO_MODE) return request<Deployment>(`/api/v1/deployments/${id}/refresh-runs`, { method: 'POST', body: '{}' }, true);
+  return mockUpdate(id, evolveMock);
 }
 
 async function simpleAction(id: string, path: string, requestedBy: string) {

@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { requireAuthSession } from "../utils/authSession";
+import { isAxiosError } from "axios";
 
 // Definindo a tipagem da resposta paginada
 export interface DatabaseItem {
@@ -112,6 +113,43 @@ export async function testDatabaseConnection(payload: DatabaseConnectionPayload)
         }
     );
     return response.data;
+}
+
+export function databaseConnectionPayloadFromUrl(connectionUrl: string, cnpj?: string): DatabaseConnectionPayload {
+    const parsed = new URL(connectionUrl.trim());
+    const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    const user = decodeURIComponent(parsed.username);
+    const password = decodeURIComponent(parsed.password);
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !database || !user || !password) {
+        throw new Error('Use uma URL PostgreSQL completa, incluindo usuário e senha.');
+    }
+    const port = parsed.port ? Number(parsed.port) : 5432;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error('A porta informada na URL PostgreSQL é inválida.');
+    }
+    const sslMode = parsed.searchParams.get('sslmode')?.toLowerCase();
+    const ssl = parsed.searchParams.get('ssl') === 'true'
+        || ['require', 'verify-ca', 'verify-full'].includes(sslMode || '');
+    return {
+        host: parsed.hostname,
+        port,
+        database,
+        user,
+        password,
+        ssl,
+        ...(cnpj ? { cnpj: cnpj.replace(/\D/g, '') } : {}),
+    };
+}
+
+export async function testDatabaseConnectionUrl(connectionUrl: string, cnpj?: string) {
+    return testDatabaseConnection(databaseConnectionPayloadFromUrl(connectionUrl, cnpj));
+}
+
+export function databaseConnectionErrorMessage(error: unknown) {
+    if (isAxiosError<{ error?: string; message?: string }>(error)) {
+        return error.response?.data?.error || error.response?.data?.message || error.message;
+    }
+    return error instanceof Error ? error.message : 'Não foi possível validar a conexão.';
 }
 
 export async function checkIntegrationDatabaseStatus(database: string) {
