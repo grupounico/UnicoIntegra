@@ -68,6 +68,7 @@ export interface UnitForm {
 }
 
 export interface DeploymentUnit {
+  atenderBemConfig?: AtenderBemConfiguration | null;
   id: string;
   deploymentId: string;
   code: string;
@@ -119,6 +120,37 @@ export interface DeploymentUnit {
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
   retryable: boolean;
+}
+
+export interface AtenderBemConfiguration {
+  version: number;
+  status: 'configured' | 'creating_group' | 'group_ready' | 'group_creation_unknown';
+  import?: { status: string; jobId?: number; fileId?: number; bytes?: number; total?: number; processed?: number; created?: number; updated?: number; errors?: number; reindexMarked?: number };
+  mcpUrl: string;
+  feedBaseUrl: string;
+  feedUnitId: number;
+  feedAuth: 'bearer' | 'api-key';
+  groupMode: 'create' | 'existing';
+  groupName: string;
+  groupId: number | null;
+  hasMcpKey: boolean;
+  hasFeedKey: boolean;
+  source: 'meta';
+  missingPolicy: 'ignore';
+  filePolicy: 'replace';
+  refreshHours: number;
+  executionEnabled: false;
+  updatedAt: string;
+}
+
+export interface AtenderBemConfigurationInput {
+  mcpUrl: string;
+  mcpKey: string;
+  feedKey: string;
+  feedAuth: 'bearer' | 'api-key';
+  groupMode: 'create' | 'existing';
+  groupName: string;
+  groupId: string;
 }
 
 export interface DeploymentAsset {
@@ -265,6 +297,15 @@ async function request<T>(path: string, options: RequestInit = {}, mutable = fal
     throw new CatalogApiError((body && typeof body === 'object' && 'code' in body ? body : fallback) as DeploymentError);
   }
   return body as T;
+}
+
+export async function getAtenderBemSettings(): Promise<{ feedBaseUrl: string; feedUnitIdSource: 'saved' | 'hubSellerUnitId' | 'sourceUnitId' }> {
+  return request('/api/v1/deployments/atenderbem/settings');
+}
+
+export async function saveAtenderBemConfiguration(deploymentId: string, unitId: string, input: AtenderBemConfigurationInput, requestedBy: string): Promise<AtenderBemConfiguration> {
+  if (CATALOG_DEMO_MODE) throw new Error('Para salvar credenciais, use o Integra conectado ao backend.');
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem`, { method: 'PUT', body: JSON.stringify({ ...input, requestedBy }) });
 }
 
 function makeUnit(deploymentId: string, input: UnitForm): DeploymentUnit {
@@ -550,4 +591,14 @@ export function subscribeToDeployment(id: string, onEvent: () => void) {
     if (!(error instanceof DOMException && error.name === 'AbortError')) console.warn('Fluxo de eventos do catálogo indisponível; polling mantido.', error);
   });
   return () => controller.abort();
+}
+
+export async function createAtenderBemGroup(deploymentId: string, unitId: string, requestedBy: string): Promise<AtenderBemConfiguration> {
+  if (CATALOG_DEMO_MODE) throw new Error('Para criar o grupo, use o Integra conectado ao backend.');
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/group`, { method: 'POST', body: JSON.stringify({ requestedBy }) });
+}
+
+export async function runAtenderBemImport(deploymentId: string, unitId: string, check = false): Promise<AtenderBemConfiguration> {
+  if (CATALOG_DEMO_MODE) throw new Error('Use o Integra conectado ao backend para importar.');
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/import${check ? '/status' : ''}`, { method: 'POST', body: JSON.stringify({}) });
 }

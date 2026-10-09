@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowRight, Ban, Boxes, Check, Circle, Copy, Eye, EyeOff, ExternalLink, KeyRound, Loader2, PencilLine, Play, RefreshCw, RotateCcw, Server, Store, TriangleAlert, X } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { cancelDeployment, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, retryDeployment, retryUnit, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
+import { cancelDeployment, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, runAtenderBemImport, retryDeployment, retryUnit, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, StatusBadge, formatCnpj, formatDate, primaryButtonClass, secondaryButtonClass, statusLabel } from './catalogUi';
 
@@ -15,10 +15,89 @@ const stages = [
   { key: 'activation', label: 'Ativação', statuses: ['awaiting_activation', 'completed'] },
 ];
 
+function atenderBemProgress(deployment: Deployment) {
+  const completed = deployment.units.filter(unit => unit.atenderBemConfig?.import?.status === 'completed' && !unit.atenderBemConfig.import.errors).length;
+  const configured = deployment.units.filter(unit => unit.atenderBemConfig).length;
+  const processing = deployment.units.some(unit => ['uploading', 'queued', 'running', 'reindexing'].includes(unit.atenderBemConfig?.import?.status || ''));
+  const attention = deployment.units.some(unit => ['failed', 'cancelled', 'unknown', 'failed_before_import', 'reindex_unknown'].includes(unit.atenderBemConfig?.import?.status || '') || Boolean(unit.atenderBemConfig?.import?.errors));
+  const done = deployment.units.length > 0 && completed === deployment.units.length;
+  return { completed, configured, processing, done, label: done ? 'Concluído' : processing ? 'Em andamento' : attention ? 'Atenção necessária' : configured ? 'Configuração salva' : 'Pendente' };
+}
+
 function DeploymentProgress({ deployment }: { deployment: Deployment }) {
-  const visibleStages = deployment.flowMode === 'hub_banco_only' ? [stages[0], stages[1], { key: 'bank', label: 'Banco Único', statuses: ['importing_banco_unico', 'completed'] }] : stages;
-  const activeIndex = deployment.status === 'completed' ? visibleStages.length : Math.max(0, visibleStages.findIndex((stage) => stage.statuses.includes(deployment.status)));
-  return <section className="rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-6"><div className="flex items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-slate-950">Progresso da implantação</h2><p className="mt-1 text-sm text-slate-500">O status é atualizado automaticamente enquanto o processamento avança.</p></div>{processingStatuses.includes(deployment.status) ? <span className="inline-flex shrink-0 items-center gap-2 text-xs font-medium text-primary"><span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-primary" /></span>Ao vivo</span> : null}</div><ol className={`mt-7 grid gap-4 ${deployment.flowMode === 'hub_banco_only' ? 'sm:grid-cols-3' : 'sm:grid-cols-5'}`}>{visibleStages.map((stage, index) => { const done = index < activeIndex || deployment.status === 'completed'; const active = index === activeIndex && deployment.status !== 'completed'; return <li key={stage.key} className="relative"><div className="flex items-center sm:block"><div className="flex items-center"><span className={`relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border-2 ${done ? 'border-emerald-600 bg-emerald-600 text-white' : active ? 'border-primary bg-primary text-white' : 'border-slate-200 bg-white text-slate-400'}`}>{done ? <Check className="size-4" /> : active ? <Loader2 className={`size-4 ${processingStatuses.includes(deployment.status) ? 'animate-spin' : ''}`} /> : <Circle className="size-3" />}</span>{index < visibleStages.length - 1 ? <span className={`hidden h-0.5 flex-1 sm:block ${index < activeIndex ? 'bg-emerald-500' : 'bg-slate-200'}`} /> : null}</div><span className={`ml-3 text-xs font-semibold sm:ml-0 sm:mt-3 sm:block ${done ? 'text-emerald-700' : active ? 'text-primary' : 'text-slate-400'}`}>{stage.label}</span></div></li>; })}</ol></section>;
+  const atenderBem = atenderBemProgress(deployment);
+  const baseStages = deployment.flowMode === 'hub_banco_only'
+    ? [stages[0], stages[1], { key: 'bank', label: 'Banco Único', statuses: ['importing_banco_unico', 'completed'] }]
+    : stages;
+  const visibleStages = [...baseStages, { key: 'atenderbem', label: 'AtenderBem', statuses: [] }];
+  const activeIndex = deployment.status === 'completed' ? baseStages.length : Math.max(0, baseStages.findIndex(stage => stage.statuses.includes(deployment.status)));
+  return <section className="rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-6">
+    <div className="flex items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-slate-950">Progresso da implantação</h2><p className="mt-1 text-sm text-slate-600">Acompanhe a implantação e prepare a conexão final com o AtenderBem.</p></div>{processingStatuses.includes(deployment.status) ? <span className="inline-flex shrink-0 items-center gap-2 text-xs font-medium text-primary">Ao vivo</span> : null}</div>
+    <ol className={`mt-7 grid gap-4 ${deployment.flowMode === 'hub_banco_only' ? 'sm:grid-cols-4' : 'sm:grid-cols-3 lg:grid-cols-6'}`}>
+      {visibleStages.map((stage, index) => {
+        const final = stage.key === 'atenderbem';
+        const done = final ? atenderBem.done : index < activeIndex || deployment.status === 'completed';
+        const active = final ? !done && (atenderBem.processing || deployment.status === 'completed') : index === activeIndex && deployment.status !== 'completed';
+        const content = <><span className={`flex size-8 shrink-0 items-center justify-center rounded-full border-2 ${done ? 'border-emerald-600 bg-emerald-600 text-white' : active ? 'border-primary bg-primary text-white' : 'border-slate-200 bg-white text-slate-600'}`}>{done ? <Check className="size-4" /> : final ? <ArrowRight className="size-4" /> : active ? <Loader2 className={`size-4 ${processingStatuses.includes(deployment.status) ? 'animate-spin' : ''}`} /> : <Circle className="size-3" />}</span><span className={`text-xs font-semibold ${done ? 'text-emerald-700' : active || final ? 'text-primary' : 'text-slate-600'}`}>{stage.label}</span></>;
+        return <li key={stage.key} className="relative">
+          {index < visibleStages.length - 1 && <span aria-hidden="true" className={`absolute left-8 right-0 top-4 hidden h-0.5 sm:block ${done ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
+          {final ? <Link to={`/main/catalogo/${deployment.id}/atenderbem`} aria-label={atenderBem.done ? 'Etapa AtenderBem concluída; revisar configuração' : 'Configurar etapa AtenderBem'} className="relative z-10 flex items-center gap-3 rounded-lg focus-visible:outline-2 focus-visible:outline-primary sm:items-start sm:flex-col">{content}</Link> : <div className="relative z-10 flex items-center gap-3 sm:items-start sm:flex-col">{content}</div>}
+        </li>;
+      })}
+    </ol>
+  </section>;
+}
+
+function AtenderBemImportStatus({ deploymentId, unit, onRefresh }: { deploymentId: string; unit: DeploymentUnit; onRefresh: () => Promise<void> }) {
+  const progress = unit.atenderBemConfig?.import;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const jobId = progress?.jobId;
+  const status = progress?.status;
+  const check = useCallback(async () => {
+    setBusy(true);
+    try { await runAtenderBemImport(deploymentId, unit.id, true); await onRefresh(); setError(''); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Não foi possível consultar a importação.'); }
+    finally { setBusy(false); }
+  }, [deploymentId, unit.id, onRefresh]);
+  useEffect(() => {
+    if (!jobId || !['queued', 'running'].includes(status || '')) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() { await check(); if (active) timer = setTimeout(() => void poll(), 15000); }
+    timer = setTimeout(() => void poll(), 3000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [jobId, status, check]);
+  if (!progress) return null;
+  const labels: Record<string, string> = { uploading: 'Enviando CSV', queued: 'Importação na fila', running: 'Importando produtos', completed: 'Importação concluída; reindexação solicitada', failed: 'Importação falhou', cancelled: 'Importação cancelada', unknown: 'Confira a importação no AtenderBem antes de repetir', reindexing: 'Solicitando reindexação', reindex_unknown: 'Produtos importados; confira a reindexação no AtenderBem', failed_before_import: 'Falha no envio do CSV' };
+  return <div className="mt-4 rounded-lg border border-slate-200 p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">{unit.name}</h3><p role="status" className="mt-1 text-sm text-slate-700">{labels[progress.status] || progress.status}{jobId ? ` · Execução ${jobId}` : ''}</p></div>{jobId && ['queued', 'running', 'failed', 'cancelled'].includes(progress.status) && <button type="button" disabled={busy} className={secondaryButtonClass} onClick={() => void check()}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar andamento</button>}</div>
+    {progress.total !== undefined && <p className="mt-2 text-xs text-slate-600">{progress.processed || 0} de {progress.total} processados · {progress.created || 0} criados · {progress.updated || 0} atualizados · {progress.errors || 0} erros</p>}
+    {error && <p role="alert" className="mt-2 text-sm text-rose-700">{error}</p>}
+  </div>;
+}
+
+function AtenderBemFinalStep({ deployment, onRefresh }: { deployment: Deployment; onRefresh: () => Promise<void> }) {
+  const { configured, completed, done, label } = atenderBemProgress(deployment);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = `atenderbem-details-${deployment.id}`;
+  if (done) return <div className="mt-4">
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+      <button type="button" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen(current => !current)} className="inline-flex min-h-9 items-center gap-2 rounded text-sm font-medium text-slate-600 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-primary"><ArrowRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${detailsOpen ? 'rotate-90' : ''}`} />Ver detalhes da importação</button>
+      <Link className="inline-flex min-h-9 items-center rounded text-sm text-slate-500 underline underline-offset-4 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-primary" to={`/main/catalogo/${deployment.id}/atenderbem`}>Revisar configuração</Link>
+    </div>
+    <div id={detailsId} hidden={!detailsOpen} className="mt-3 w-full min-w-0">
+      <p className="text-xs leading-5 text-slate-600">{completed} de {deployment.units.length} unidades com importação concluída. Reindexação solicitada para a pesquisa da IA.</p>
+      {deployment.units.map(unit => <AtenderBemImportStatus key={unit.id} deploymentId={deployment.id} unit={unit} onRefresh={onRefresh} />)}
+    </div>
+  </div>;
+  return <section className="mt-6 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-6" aria-labelledby="atenderbem-final-title">
+    <div className="flex flex-col items-start justify-between gap-5 sm:flex-row sm:items-center">
+      <div className="max-w-2xl"><div className="flex flex-wrap items-center gap-3"><h2 id="atenderbem-final-title" className="text-base font-semibold text-slate-950">{done ? 'Catálogo conectado ao AtenderBem' : 'Conectar catálogo ao AtenderBem'}</h2><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${done ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>{label}</span></div><p className="mt-2 text-sm leading-6 text-slate-600">{done ? 'A importação foi concluída e os produtos foram enfileirados para reindexação na pesquisa da IA.' : 'Etapa final para disponibilizar os produtos na pesquisa da IA. Informe a instância, o acesso ao CSV e o grupo de produtos por unidade.'}</p><p className="mt-2 text-xs leading-5 text-slate-600">{completed ? `${completed} de ${deployment.units.length} unidades com importação concluída. Acompanhe os resultados abaixo.` : configured ? `${configured} de ${deployment.units.length} unidades com dados salvos. Acompanhe as importações abaixo.` : 'Disponível para catálogo completo, Hub e Banco Único e implantações anteriores.'}</p></div>
+      <Link className={`${primaryButtonClass} shrink-0`} to={`/main/catalogo/${deployment.id}/atenderbem`}>{done ? 'Revisar configuração' : configured ? 'Continuar configuração' : 'Configurar AtenderBem'}<ArrowRight className="size-4" /></Link>
+    </div>
+    {deployment.units.filter(unit => unit.atenderBemConfig?.import).map(unit => <AtenderBemImportStatus key={unit.id} deploymentId={deployment.id} unit={unit} onRefresh={onRefresh} />)}
+  </section>;
 }
 
 const eventLabels: Record<string, string> = {
@@ -37,6 +116,9 @@ const eventLabels: Record<string, string> = {
   unit_hub_banco_ready: 'Cobertura mínima atingida no Banco Único',
   hub_banco_only_completed: 'Hub e Banco Único concluídos',
   seller_token_revealed: 'Token do Hub consultado',
+  atenderbem_configuration_saved: 'Configuração do AtenderBem salva',
+  atenderbem_group_created: 'Grupo criado no AtenderBem',
+  atenderbem_import_started: 'Importação de produtos no AtenderBem iniciada',
 };
 
 function DeploymentTimeline({ events, units }: { events: DeploymentEvent[]; units: DeploymentUnit[] }) {
@@ -127,6 +209,7 @@ export default function CatalogDeploymentDetailsPage() {
   }, [deploymentId]);
 
   useEffect(() => { void load(); }, [load]);
+  const refreshAtenderBem = useCallback(() => load(true), [load]);
 
   const refreshRuns = useCallback(async () => {
     if (!deploymentId) return;
@@ -187,7 +270,7 @@ export default function CatalogDeploymentDetailsPage() {
 
   if (deployment.flowMode === 'hub_banco_only' && processingStatuses.includes(deployment.status)) return <CatalogScreen>
     <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · Hub + Banco Único`} backTo="/main/catalogo" action={<div className="flex items-center gap-2">{deployment.hubSellerId ? <button type="button" onClick={() => setShowSellerToken(true)} className={secondaryButtonClass}><KeyRound className="size-4" />Token do Hub</button> : null}<button type="button" onClick={() => void refreshRuns()} disabled={refreshingRun} className={secondaryButtonClass}>{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar</button></div>} />
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center"><Loader2 className="size-9 animate-spin text-primary" /><div><p className="text-base font-semibold text-slate-900">Isso pode levar alguns minutos</p><p className="mt-1 text-sm text-slate-500">Consultaremos o mesmo run no Hub automaticamente a cada minuto.</p></div></div>
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center"><Loader2 className="size-9 animate-spin text-primary" /><div><p className="text-base font-semibold text-slate-900">Isso pode levar alguns minutos</p><p className="mt-1 text-sm text-slate-500">Consultaremos o mesmo run no Hub automaticamente a cada minuto.</p></div><Link to={`/main/catalogo/${deployment.id}/atenderbem`} className={secondaryButtonClass}>Preparar AtenderBem<ArrowRight className="size-4" /></Link></div>
     {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}
   </CatalogScreen>;
 
@@ -198,6 +281,7 @@ export default function CatalogDeploymentDetailsPage() {
       {actionMessage ? <div role="status" className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{actionMessage}</div> : null}
       {['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <div className="mb-6"><ErrorResolutionCard deployment={deployment} onRetry={() => void handleDeploymentAction('retry')} onReconciliation={() => setActionMessage('Solicitação de reconciliação registrada para o time responsável.')} busy={busyAction === 'retry'} /></div> : null}
       <DeploymentProgress deployment={deployment} />
+      <AtenderBemFinalStep deployment={deployment} onRefresh={refreshAtenderBem} />
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]"><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-base font-semibold text-slate-950">Unidades</h2><p className="mt-0.5 text-xs text-slate-500">Status operacional de cada origem.</p></div><span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600">{deployment.units.length}</span></div><div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">{deployment.units.map((unit) => <UnitStatusCard key={unit.id} deployment={deployment} unit={unit} busyAction={busyAction} onAction={(action, target) => void handleUnitAction(action, target)} />)}</div></div><DeploymentTimeline events={deployment.events} units={deployment.units} /></div>
       <section className="mt-6 grid gap-4 sm:grid-cols-3"><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><Server className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Seller no Hub</p><p className="mt-1 truncate font-mono text-sm font-semibold text-slate-800">{deployment.hubSellerId || 'Ainda não criado'}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Boxes className="size-4" /></span><p className="mt-4 text-xs text-slate-500">{deployment.flowMode === 'hub_banco_only' ? 'Cobertura Banco Único' : 'Imagens confirmadas'}</p><p className="mt-1 text-sm font-semibold text-slate-800">{deployment.flowMode === 'hub_banco_only' ? `${Math.min(...deployment.units.map((unit) => unit.coveragePercent ?? 0)).toFixed(1)}%` : `${deployment.assets.filter((asset) => asset.status === 'confirmed').length} de ${deployment.assets.length}`}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Activity className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Última atualização</p><p className="mt-1 text-sm font-semibold text-slate-800">{formatDate(deployment.updatedAt)}</p></div></section>
     </div></main>
