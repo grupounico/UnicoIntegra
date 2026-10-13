@@ -21,6 +21,7 @@ export type DeploymentStatus =
   | 'validating_unicommerce'
   | 'importing_banco_unico'
   | 'waiting_storefront_release'
+  | 'waiting_storefront'
   | 'awaiting_activation'
   | 'completed'
   | 'partially_failed'
