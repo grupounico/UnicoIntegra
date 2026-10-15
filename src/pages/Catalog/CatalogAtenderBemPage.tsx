@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Check, Loader2, Save } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getAtenderBemSettings, getDeployment, saveAtenderBemConfiguration, createAtenderBemGroup, runAtenderBemImport, type AtenderBemConfigurationInput, type Deployment, type DeploymentUnit } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
-import { getAtenderBemAdminKey, setAtenderBemAdminKey } from '../../services/atenderBemSession';
+import { sameCredentialUrl, credentialPlaceholder } from '../../services/atenderBemCredentials';
 import { CatalogPageHeader, CatalogScreen, fieldClass, labelClass, primaryButtonClass, secondaryButtonClass } from './catalogUi';
 
 const steps = ['Unidade', 'Conexão', 'Catálogo', 'Revisão'];
@@ -34,12 +34,13 @@ export default function CatalogAtenderBemPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [adminKey, setAdminKey] = useState(getAtenderBemAdminKey);
   const navigate = useNavigate();
   const heading = useRef<HTMLHeadingElement>(null);
   const selected = deployment?.units.find(unit => unit.id === unitId);
-  const changedMcp = selected?.atenderBemConfig?.mcpUrl !== form.mcpUrl;
-  const changedFeed = selected?.atenderBemConfig?.feedBaseUrl !== feedBaseUrl || selected?.atenderBemConfig?.feedAuth !== form.feedAuth;
+  const changedMcp = !sameCredentialUrl(selected?.atenderBemConfig?.mcpUrl, form.mcpUrl);
+  const changedFeed = !sameCredentialUrl(selected?.atenderBemConfig?.feedBaseUrl, feedBaseUrl) || selected?.atenderBemConfig?.feedAuth !== form.feedAuth;
+  const savedMcpKey = Boolean(selected?.atenderBemConfig?.hasMcpKey && !changedMcp);
+  const savedFeedKey = Boolean(selected?.atenderBemConfig?.hasFeedKey && !changedFeed);
   const feedUnitId = feedIdSource === 'saved' ? selected?.atenderBemConfig?.feedUnitId : selected?.[feedIdSource];
   const feedUrl = feedBaseUrl && positiveId(String(feedUnitId ?? '')) ? (() => { const url = new URL(feedBaseUrl); url.searchParams.set('unidadeId', String(feedUnitId)); return url.toString(); })() : '';
   useEffect(() => {
@@ -81,13 +82,12 @@ export default function CatalogAtenderBemPage() {
   }
   function next() { const message = validation(step); if (message) setError(message); else { setError(''); setStep(current => current + 1); } }
   async function save() {
-    if (!adminKey.trim()) { setError('Informe a chave administrativa do Integra para salvar.'); return; }
     const message = validation(3); if (message) { setError(message); return; }
     setBusy(true); setError('');
     try {
       let config = await saveAtenderBemConfiguration(deploymentId, unitId, form, getAuthSession()?.username || 'Operador Unico');
       setDeployment(current => current ? { ...current, units: current.units.map(unit => unit.id === unitId ? { ...unit, atenderBemConfig: config } : unit) } : current);
-      setForm(current => ({ ...current, mcpKey: '', feedKey: '' }));
+      setForm(current => ({ ...current, mcpUrl: config.mcpUrl, mcpKey: '', feedKey: '' }));
       if (!config.groupId) config = await createAtenderBemGroup(deploymentId, unitId, getAuthSession()?.username || 'Operador Unico');
       setDeployment(current => current ? { ...current, units: current.units.map(unit => unit.id === unitId ? { ...unit, atenderBemConfig: config } : unit) } : current);
       setForm(current => ({ ...current, groupMode: config.groupMode, groupId: String(config.groupId || ''), mcpKey: '', feedKey: '' }));
@@ -101,13 +101,15 @@ export default function CatalogAtenderBemPage() {
     <div className="min-h-0 flex-1 overflow-y-auto px-5 py-7 sm:px-8"><div className="mx-auto max-w-4xl">
       {loading ? <p className="flex items-center gap-2 text-sm text-slate-600"><Loader2 className="size-4 animate-spin" />Carregando dados…</p> : !deployment ? <p role="alert" className="text-sm text-rose-700">{error}</p> : <>
         <p className="mb-6 max-w-2xl text-sm leading-6 text-slate-600">Conecte o catálogo desta unidade à pesquisa do AtenderBem. Esta configuração pode ser feita também nas implantações já existentes.</p>
-        <div className="mb-6"><Field title="Chave administrativa do Integra" hint="Autoriza as alterações. Mantida somente nesta sessão em memória; não é a chave MCP."><input type="password" autoComplete="off" className={fieldClass} value={adminKey} onChange={event => { setAdminKey(event.target.value); setAtenderBemAdminKey(event.target.value); }} /></Field></div>
+        <p className="mb-4 text-sm text-slate-600">Acesso autorizado pelo seu login no Integra. Não é necessária uma chave administrativa adicional.</p>
+        {(savedMcpKey || savedFeedKey) && <div role="status" className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><p>Credenciais salvas: {[savedMcpKey ? 'MCP' : '', savedFeedKey ? 'catálogo (feed)' : ''].filter(Boolean).join(' e ')}.</p><p className="mt-1">Os campos ficam vazios por segurança. Deixe-os vazios para manter as chaves; preencha apenas se quiser substituí-las. Uma falha de conexão não apaga as credenciais salvas.</p></div>}
         <button type="button" disabled={busy || !selected?.atenderBemConfig?.groupId} className={`${secondaryButtonClass} mb-6`} onClick={() => navigate(`/main/catalogo/${deploymentId}/atenderbem/assistente?unit=${unitId}`)}>Configurar assistente WhatsApp + catálogo <ArrowRight className="size-4" /></button>
+        {!selected?.atenderBemConfig?.groupId && <p className="mb-5 text-sm text-slate-600">Para liberar o assistente, conclua a conexão e vincule um grupo do AtenderBem nas etapas abaixo.</p>}
         <nav aria-label="Etapas da configuração"><ol className="grid grid-cols-2 gap-3 sm:grid-cols-4">{steps.map((label, index) => <li key={label}><button type="button" disabled={busy || index > step} aria-current={index === step ? 'step' : undefined} onClick={() => { setStep(index); setError(''); }} className={`flex w-full items-center gap-3 border-b-2 pb-3 text-left text-sm font-medium ${index === step ? 'border-primary text-primary' : 'border-slate-200 text-slate-600'} disabled:cursor-default`}><span className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs ${index === step ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`}>{index < step ? <Check className="size-4" /> : index + 1}</span>{label}</button></li>)}</ol></nav>
         <form className="mt-6 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-7" onSubmit={event => { event.preventDefault(); if (step < 3) next(); else if (!busy) void save(); }}>
           <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold text-slate-950 outline-none">{['Qual unidade vamos conectar?', 'Acesso à instância do AtenderBem', 'Origem e grupo de produtos', 'Revise a configuração'][step]}</h2>
           {step === 0 && <div className="mt-6 space-y-5"><Field title="Unidade"><select className={fieldClass} value={unitId} onChange={event => { const unit = deployment.units.find(item => item.id === event.target.value); setUnitId(event.target.value); setForm(formFor(unit)); setSearch({ unit: event.target.value }, { replace: true }); setError(''); }}>{deployment.units.map(unit => <option key={unit.id} value={unit.id}>{unit.name} · {unit.code}{unit.atenderBemConfig ? ' · Configuração salva' : ''}</option>)}</select></Field><dl className="grid grid-cols-2 gap-5 border-t border-slate-200 pt-5 text-sm"><div><dt className="text-slate-600">Implantação</dt><dd className="mt-1 font-medium">{deployment.flowMode === 'hub_banco_only' ? 'Hub e Banco Único' : 'Catálogo completo'}</dd></div><div><dt className="text-slate-600">Unidade no Hub</dt><dd className="mt-1 font-medium">{selected?.hubSellerUnitId || 'Ainda não vinculada'}</dd></div></dl><p className="text-sm leading-6 text-slate-600">Você pode preparar os dados agora. A importação depende do catálogo disponível e dos acessos validados.</p></div>}
-          {step === 1 && <div className="mt-6 space-y-5"><Field title="URL do MCP" hint="Use o endpoint /mcp da instância que receberá os produtos."><input required type="url" className={fieldClass} value={form.mcpUrl} onChange={event => update('mcpUrl', event.target.value)} /></Field><Field title="Chave MCP" hint={selected?.atenderBemConfig?.hasMcpKey && !changedMcp ? 'Chave já salva. Deixe em branco para mantê-la.' : 'Credencial usada no acesso Bearer à instância.'}><input type="password" autoComplete="new-password" className={fieldClass} value={form.mcpKey} onChange={event => update('mcpKey', event.target.value)} /></Field><p className="text-xs leading-5 text-slate-600">As credenciais são cifradas no servidor e não voltam para o formulário.</p></div>}
+          {step === 1 && <div className="mt-6 space-y-5"><Field title="URL do MCP" hint="Use o endpoint /mcp da instância que receberá os produtos."><input required type="url" className={fieldClass} value={form.mcpUrl} onChange={event => update('mcpUrl', event.target.value)} /></Field><Field title="Chave MCP" hint={selected?.atenderBemConfig?.hasMcpKey && !changedMcp ? 'Chave já salva. Deixe em branco para mantê-la.' : 'Credencial usada no acesso Bearer à instância.'}><input type="password" autoComplete="new-password" placeholder={credentialPlaceholder(savedMcpKey)} className={fieldClass} value={form.mcpKey} onChange={event => update('mcpKey', event.target.value)} /></Field><p className="text-xs leading-5 text-slate-600">As credenciais são cifradas no servidor e não voltam para o formulário.</p></div>}
           {step === 2 && <div className="mt-6 space-y-5">
             <Field title="Autenticação do feed">
               <select className={fieldClass} value={form.feedAuth} onChange={event => update('feedAuth', event.target.value as 'bearer' | 'api-key')}>
@@ -116,7 +118,7 @@ export default function CatalogAtenderBemPage() {
               </select>
             </Field>
             <Field title="Credencial do feed" hint={selected?.atenderBemConfig?.hasFeedKey && !changedFeed ? 'Credencial já salva. Deixe em branco para mantê-la.' : 'Credencial que permite consultar o CSV dessa unidade.'}>
-              <input type="password" autoComplete="new-password" className={fieldClass} value={form.feedKey} onChange={event => update('feedKey', event.target.value)} />
+              <input type="password" autoComplete="new-password" placeholder={credentialPlaceholder(savedFeedKey)} className={fieldClass} value={form.feedKey} onChange={event => update('feedKey', event.target.value)} />
             </Field>
             <div className="border-t border-slate-200 pt-5">
               <Field title="Grupo no AtenderBem">

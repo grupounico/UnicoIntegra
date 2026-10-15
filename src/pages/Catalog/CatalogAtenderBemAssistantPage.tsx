@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 import { API_BASE } from '../../services/api';
-import { getAtenderBemAdminKey } from '../../services/atenderBemSession';
+import { atenderBemHeaders } from '../../services/atenderBemSession';
 import { getDeployment, type Deployment } from '../../services/catalogDeployment.service';
 import { CatalogPageHeader, CatalogScreen, fieldClass, labelClass, primaryButtonClass, secondaryButtonClass } from './catalogUi';
 
@@ -19,7 +19,6 @@ export default function CatalogAtenderBemAssistantPage() {
   const [query, setQuery] = useSearchParams();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [unitId, setUnitId] = useState('');
-  const [key, setKey] = useState(getAtenderBemAdminKey);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [installation, setInstallation] = useState<Installation | null>(null);
   const [form, setForm] = useState(initial);
@@ -43,7 +42,7 @@ export default function CatalogAtenderBemAssistantPage() {
   }, [deploymentId]);
   async function request<T>(suffix = '', body?: object): Promise<T> {
     const response = await fetch(`${API_BASE}/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/assistant${suffix}`, {
-      method: body ? 'POST' : 'GET', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-API-Key': key },
+      method: body ? 'POST' : 'GET', credentials: 'include', headers: { 'Content-Type': 'application/json', ...atenderBemHeaders() },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(110000),
     });
     const result = await response.json();
@@ -83,10 +82,10 @@ export default function CatalogAtenderBemAssistantPage() {
         <p className="mt-2 text-sm leading-6 text-slate-600">Reutilizamos a instância e a chave MCP já salvas para o catálogo. A origem unicodev é somente o modelo: seus IDs e credenciais não são copiados.</p>
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <label className={labelClass}>Unidade<select disabled={busy} className={fieldClass} value={unitId} onChange={event => { setUnitId(event.target.value); setQuery({ unit: event.target.value }); setDiscovery(null); setInstallation(null); setHumanConfirmed(false); setReplaceExisting(false); }}>{deployment?.units.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
-          <label className={labelClass}>Chave administrativa do Integra<input type="password" autoComplete="off" disabled={busy} className={fieldClass} value={key} onChange={event => setKey(event.target.value)} /><span className="mt-1 block text-xs font-normal text-slate-500">ADMIN_API_KEY do backend. Usada apenas nesta tela, sem armazenamento no navegador.</span></label>
         </div>
         <dl className="mt-5 space-y-2 break-all text-sm text-slate-600"><div>Destino: {selected?.atenderBemConfig?.mcpUrl || 'Configure o AtenderBem primeiro'}</div><div>Catálogo: {selected?.storefrontDomain || 'Aguardando domínio'}</div><div>Tenant: {selected?.unicommerceTenantId || 'Aguardando tenant'}</div></dl>
-        <button disabled={busy || !key.trim() || !selected?.atenderBemConfig?.groupId} className={`${secondaryButtonClass} mt-5`} onClick={() => void act(connect)}><RefreshCw className="size-4" />Consultar configuração</button>
+        <p className="mt-3 text-xs text-slate-600">Acesso autorizado pelo seu login no Integra. Nenhuma chave administrativa adicional é necessária.</p>
+        <button disabled={busy || !selected?.atenderBemConfig?.groupId} className={`${secondaryButtonClass} mt-5`} onClick={() => void act(connect)}><RefreshCw className="size-4" />Consultar configuração</button>
       </div>
       {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
       {busy && <p role="status" className="flex items-center gap-2 text-sm text-blue-700"><Loader2 className="size-4 animate-spin" />Processando uma etapa por vez…</p>}
