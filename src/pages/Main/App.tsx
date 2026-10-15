@@ -28,6 +28,7 @@ import CatalogDeploymentDetailsPage from '../Catalog/CatalogDeploymentDetailsPag
 import CatalogActivationReviewPage from '../Catalog/CatalogActivationReviewPage';
 import EditCatalogDeploymentPage from '../Catalog/EditCatalogDeploymentPage';
 import CatalogAtenderBemPage from '../Catalog/CatalogAtenderBemPage';
+import CatalogAtenderBemAssistantPage from '../Catalog/CatalogAtenderBemAssistantPage';
 import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
 
 export default function App() {
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="catalogo/novo" element={<NewCatalogDeploymentPage />} />
             <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />
             <Route path="catalogo/:deploymentId/atenderbem" element={<CatalogAtenderBemPage />} />
+            <Route path="catalogo/:deploymentId/atenderbem/assistente" element={<CatalogAtenderBemAssistantPage />} />
             <Route path="catalogo/:deploymentId/corrigir" element={<EditCatalogDeploymentPage />} />
             <Route path="catalogo/:deploymentId" element={<CatalogDeploymentDetailsPage />} />
             <Route path="*" element={<Navigate to="home" replace />} />

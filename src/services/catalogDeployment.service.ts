@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { atenderBemHeaders } from './atenderBemSession';
 
 export type AssetType =
   | 'banner_1'
@@ -70,6 +71,7 @@ export interface UnitForm {
 
 export interface DeploymentUnit {
   atenderBemConfig?: AtenderBemConfiguration | null;
+  storefrontDomain?: string | null;
   id: string;
   deploymentId: string;
   code: string;
@@ -306,7 +308,7 @@ export async function getAtenderBemSettings(): Promise<{ feedBaseUrl: string; fe
 
 export async function saveAtenderBemConfiguration(deploymentId: string, unitId: string, input: AtenderBemConfigurationInput, requestedBy: string): Promise<AtenderBemConfiguration> {
   if (CATALOG_DEMO_MODE) throw new Error('Para salvar credenciais, use o Integra conectado ao backend.');
-  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem`, { method: 'PUT', body: JSON.stringify({ ...input, requestedBy }) });
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem`, { method: 'PUT', headers: atenderBemHeaders(), body: JSON.stringify({ ...input, requestedBy }) });
 }
 
 function makeUnit(deploymentId: string, input: UnitForm): DeploymentUnit {
@@ -596,10 +598,10 @@ export function subscribeToDeployment(id: string, onEvent: () => void) {
 
 export async function createAtenderBemGroup(deploymentId: string, unitId: string, requestedBy: string): Promise<AtenderBemConfiguration> {
   if (CATALOG_DEMO_MODE) throw new Error('Para criar o grupo, use o Integra conectado ao backend.');
-  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/group`, { method: 'POST', body: JSON.stringify({ requestedBy }) });
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/group`, { method: 'POST', headers: atenderBemHeaders(), body: JSON.stringify({ requestedBy }) });
 }
 
 export async function runAtenderBemImport(deploymentId: string, unitId: string, check = false): Promise<AtenderBemConfiguration> {
   if (CATALOG_DEMO_MODE) throw new Error('Use o Integra conectado ao backend para importar.');
-  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/import${check ? '/status' : ''}`, { method: 'POST', body: JSON.stringify({}) });
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem/import${check ? '/status' : ''}`, { method: 'POST', headers: atenderBemHeaders(), body: JSON.stringify({}) });
 }

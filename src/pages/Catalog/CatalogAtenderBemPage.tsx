@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Check, Loader2, Save } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getAtenderBemSettings, getDeployment, saveAtenderBemConfiguration, createAtenderBemGroup, runAtenderBemImport, type AtenderBemConfigurationInput, type Deployment, type DeploymentUnit } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
+import { getAtenderBemAdminKey, setAtenderBemAdminKey } from '../../services/atenderBemSession';
 import { CatalogPageHeader, CatalogScreen, fieldClass, labelClass, primaryButtonClass, secondaryButtonClass } from './catalogUi';
 
 const steps = ['Unidade', 'Conexão', 'Catálogo', 'Revisão'];
@@ -33,6 +34,7 @@ export default function CatalogAtenderBemPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [adminKey, setAdminKey] = useState(getAtenderBemAdminKey);
   const navigate = useNavigate();
   const heading = useRef<HTMLHeadingElement>(null);
   const selected = deployment?.units.find(unit => unit.id === unitId);
@@ -79,6 +81,7 @@ export default function CatalogAtenderBemPage() {
   }
   function next() { const message = validation(step); if (message) setError(message); else { setError(''); setStep(current => current + 1); } }
   async function save() {
+    if (!adminKey.trim()) { setError('Informe a chave administrativa do Integra para salvar.'); return; }
     const message = validation(3); if (message) { setError(message); return; }
     setBusy(true); setError('');
     try {
@@ -98,6 +101,8 @@ export default function CatalogAtenderBemPage() {
     <div className="min-h-0 flex-1 overflow-y-auto px-5 py-7 sm:px-8"><div className="mx-auto max-w-4xl">
       {loading ? <p className="flex items-center gap-2 text-sm text-slate-600"><Loader2 className="size-4 animate-spin" />Carregando dados…</p> : !deployment ? <p role="alert" className="text-sm text-rose-700">{error}</p> : <>
         <p className="mb-6 max-w-2xl text-sm leading-6 text-slate-600">Conecte o catálogo desta unidade à pesquisa do AtenderBem. Esta configuração pode ser feita também nas implantações já existentes.</p>
+        <div className="mb-6"><Field title="Chave administrativa do Integra" hint="Autoriza as alterações. Mantida somente nesta sessão em memória; não é a chave MCP."><input type="password" autoComplete="off" className={fieldClass} value={adminKey} onChange={event => { setAdminKey(event.target.value); setAtenderBemAdminKey(event.target.value); }} /></Field></div>
+        <button type="button" disabled={busy || !selected?.atenderBemConfig?.groupId} className={`${secondaryButtonClass} mb-6`} onClick={() => navigate(`/main/catalogo/${deploymentId}/atenderbem/assistente?unit=${unitId}`)}>Configurar assistente WhatsApp + catálogo <ArrowRight className="size-4" /></button>
         <nav aria-label="Etapas da configuração"><ol className="grid grid-cols-2 gap-3 sm:grid-cols-4">{steps.map((label, index) => <li key={label}><button type="button" disabled={busy || index > step} aria-current={index === step ? 'step' : undefined} onClick={() => { setStep(index); setError(''); }} className={`flex w-full items-center gap-3 border-b-2 pb-3 text-left text-sm font-medium ${index === step ? 'border-primary text-primary' : 'border-slate-200 text-slate-600'} disabled:cursor-default`}><span className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs ${index === step ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`}>{index < step ? <Check className="size-4" /> : index + 1}</span>{label}</button></li>)}</ol></nav>
         <form className="mt-6 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-7" onSubmit={event => { event.preventDefault(); if (step < 3) next(); else if (!busy) void save(); }}>
           <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold text-slate-950 outline-none">{['Qual unidade vamos conectar?', 'Acesso à instância do AtenderBem', 'Origem e grupo de produtos', 'Revise a configuração'][step]}</h2>
