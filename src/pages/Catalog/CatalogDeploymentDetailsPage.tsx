@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { cancelDeployment, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, runAtenderBemImport, retryDeployment, retryUnit, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
-import { getAtenderBemAdminKey } from '../../services/atenderBemSession';
+import { hasAtenderBemSession } from '../../services/atenderBemSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, StatusBadge, formatCnpj, formatDate, primaryButtonClass, secondaryButtonClass, statusLabel } from './catalogUi';
 
 const resumableStatuses: DeploymentStatus[] = ['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'];
@@ -66,7 +66,7 @@ function AtenderBemImportStatus({ deploymentId, unit, onRefresh }: { deploymentI
     finally { setBusy(false); }
   }, [deploymentId, unit.id, onRefresh]);
   useEffect(() => {
-    if (!jobId || !['queued', 'running'].includes(status || '') || !getAtenderBemAdminKey()) return;
+    if (!jobId || !['queued', 'running'].includes(status || '') || !hasAtenderBemSession()) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() { await check(); if (active) timer = setTimeout(() => void poll(), 15000); }
