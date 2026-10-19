@@ -671,7 +671,7 @@ export async function createAtenderBemGroup(deploymentId: string, unitId: string
 
 export async function createDeploymentAi(deploymentId: string, unitId: string, input: { modality: 'venda'; name: string; signatureName: string }, requestedBy: string): Promise<DeploymentAi> {
   if (CATALOG_DEMO_MODE) throw new Error('Use o Integra conectado ao backend para criar a IA.');
-  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/ai`, { method: 'POST', body: JSON.stringify({ ...input, requestedBy }) });
+  return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/ai`, { method: 'POST', headers: atenderBemHeaders(), body: JSON.stringify({ ...input, requestedBy }) });
 }
 
 export async function runAtenderBemImport(deploymentId: string, unitId: string, check = false): Promise<AtenderBemConfiguration> {
