@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:catalog-staging": "node scripts/start-catalog-staging.mjs",
     "build": "tsc -b && vite build",
     "version:patch": "npm version patch --no-git-tag-version",
     "version:minor": "npm version minor --no-git-tag-version",
@@ -19,6 +20,7 @@
     "release:major:push": "node ./scripts/release.mjs --level major --push",
     "release:notes": "node ./scripts/generate-release-notes.mjs",
     "lint": "eslint .",
+    "test:catalog-assets": "node ./scripts/test-catalog-assets.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

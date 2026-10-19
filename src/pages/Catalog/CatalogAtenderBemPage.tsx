@@ -32,6 +32,10 @@ export default function CatalogAtenderBemPage() {
   const [feedIdSource, setFeedIdSource] = useState<'saved' | 'hubSellerUnitId' | 'sourceUnitId'>('saved');
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsAttempt, setSettingsAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -46,14 +50,13 @@ export default function CatalogAtenderBemPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    Promise.all([getDeployment(deploymentId), getAtenderBemSettings()]).then(([result, settings]) => {
+    getDeployment(deploymentId).then(result => {
       if (!active) return;
       const unit = result.units.find(item => item.id === search.get('unit')) || result.units[0];
       if (unit?.atenderBemConfig?.import?.jobId && ['queued', 'running'].includes(unit.atenderBemConfig.import.status)) {
         navigate(`/main/catalogo/${deploymentId}`, { replace: true });
         return;
       }
-      setFeedBaseUrl(settings.feedBaseUrl); setFeedIdSource(settings.feedUnitIdSource);
       setDeployment(result); setUnitId(unit?.id || ''); setForm(formFor(unit));
       if (unit?.atenderBemConfig?.groupId) setStep(3);
     }).catch(caught => { if (active) setError(caught instanceof Error ? caught.message : 'Não foi possível carregar a implantação.'); })
@@ -62,6 +65,17 @@ export default function CatalogAtenderBemPage() {
   // Selecting another unit is handled locally to avoid reloading and clearing its form.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deploymentId]);
+  useEffect(() => {
+    let active = true;
+    setSettingsLoading(true); setSettingsReady(false); setSettingsError('');
+    getAtenderBemSettings().then(settings => {
+      if (!active) return;
+      setFeedBaseUrl(settings.feedBaseUrl); setFeedIdSource(settings.feedUnitIdSource); setSettingsReady(true);
+    }).catch(caught => {
+      if (active) setSettingsError(caught instanceof Error ? caught.message : 'Não foi possível carregar a configuração do feed.');
+    }).finally(() => { if (active) setSettingsLoading(false); });
+    return () => { active = false; };
+  }, [settingsAttempt]);
   useEffect(() => { if (!loading) heading.current?.focus(); }, [step, loading]);
   function update<K extends keyof AtenderBemConfigurationInput>(key: K, value: AtenderBemConfigurationInput[K]) {
     setForm(current => ({ ...current, [key]: value })); setError('');
@@ -73,6 +87,7 @@ export default function CatalogAtenderBemPage() {
       if (!form.mcpKey.trim() && (!selected.atenderBemConfig?.hasMcpKey || changedMcp)) return 'Informe a chave MCP para essa instância.';
     }
     if (at >= 2) {
+      if (!settingsReady) return settingsError || 'Aguarde o carregamento da configuração do feed antes de continuar.';
       if (!feedUrl) return 'O ID do feed ainda não está vinculado à unidade selecionada. Confirme o vínculo antes de salvar.';
       if (!form.feedKey.trim() && (!selected.atenderBemConfig?.hasFeedKey || changedFeed)) return 'Informe a credencial do feed.';
       if (form.groupMode === 'existing' && !positiveId(form.groupId)) return 'Informe o ID do grupo existente.';
@@ -97,11 +112,12 @@ export default function CatalogAtenderBemPage() {
     finally { setBusy(false); }
   }
   return <CatalogScreen>
-    <CatalogPageHeader title="Configurar AtenderBem" description={deployment ? `${deployment.groupName} · Etapa final do catálogo` : 'Carregando implantação…'} backTo={`/main/catalogo/${deploymentId}`} />
+    <CatalogPageHeader title="Configurar AtenderBem" description={deployment ? `${deployment.groupName} · Etapa final do catálogo` : loading ? 'Carregando implantação…' : 'Não foi possível carregar a implantação.'} backTo={`/main/catalogo/${deploymentId}`} />
     <div className="min-h-0 flex-1 overflow-y-auto px-5 py-7 sm:px-8"><div className="mx-auto max-w-4xl">
       {loading ? <p className="flex items-center gap-2 text-sm text-slate-600"><Loader2 className="size-4 animate-spin" />Carregando dados…</p> : !deployment ? <p role="alert" className="text-sm text-rose-700">{error}</p> : <>
         <p className="mb-6 max-w-2xl text-sm leading-6 text-slate-600">Conecte o catálogo desta unidade à pesquisa do AtenderBem. Esta configuração pode ser feita também nas implantações já existentes.</p>
         <p className="mb-4 text-sm text-slate-600">Acesso autorizado pelo seu login no Integra. Não é necessária uma chave administrativa adicional.</p>
+        {settingsLoading ? <p role="status" className="mb-5 flex items-center gap-2 text-sm text-slate-600"><Loader2 className="size-4 animate-spin" />Carregando configuração do feed…</p> : settingsError && <div role="alert" className="mb-5 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"><p>{settingsError}</p><p className="mt-2">Você pode preencher os dados. A confirmação e a importação ficam bloqueadas até carregar a configuração do feed.</p><button type="button" className={`${secondaryButtonClass} mt-3`} onClick={() => setSettingsAttempt(current => current + 1)}>Tentar carregar configuração novamente</button></div>}
         {(savedMcpKey || savedFeedKey) && <div role="status" className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><p>Credenciais salvas: {[savedMcpKey ? 'MCP' : '', savedFeedKey ? 'catálogo (feed)' : ''].filter(Boolean).join(' e ')}.</p><p className="mt-1">Os campos ficam vazios por segurança. Deixe-os vazios para manter as chaves; preencha apenas se quiser substituí-las. Uma falha de conexão não apaga as credenciais salvas.</p></div>}
         <button type="button" disabled={busy || !selected?.atenderBemConfig?.groupId} className={`${secondaryButtonClass} mb-6`} onClick={() => navigate(`/main/catalogo/${deploymentId}/atenderbem/assistente?unit=${unitId}`)}>Configurar assistente WhatsApp + catálogo <ArrowRight className="size-4" /></button>
         {!selected?.atenderBemConfig?.groupId && <p className="mb-5 text-sm text-slate-600">Para liberar o assistente, conclua a conexão e vincule um grupo do AtenderBem nas etapas abaixo.</p>}
@@ -131,12 +147,12 @@ export default function CatalogAtenderBemPage() {
             </div>
           </div>}
           {step === 3 && <div className="mt-6"><dl className="divide-y divide-slate-200 text-sm">{[
-            ['Unidade', selected?.name], ['Instância MCP', form.mcpUrl], ['Feed CSV', feedUrl || 'ID ainda não vinculado'],
+            ['Unidade', selected?.name], ['Instância MCP', form.mcpUrl], ['Feed CSV', settingsReady ? feedUrl || 'ID ainda não vinculado' : 'Configuração do feed indisponível'],
             ['Autenticação do feed', form.feedAuth === 'bearer' ? 'Bearer Token' : 'X-API-Key'], ['Grupo', form.groupMode === 'create' ? `Criar: ${form.groupName}` : `Existente: ${form.groupId}`],
             ['Formato do catálogo', 'Meta Commerce · CSV'], ['Produtos ausentes', 'Ignorar e manter os dados atuais'], ['Arquivo atualizado', 'Substituir o arquivo anterior'], ['Frequência prevista', 'A cada 8 horas'],
           ].map(([label, value]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-[180px_1fr] sm:gap-5"><dt className="text-slate-600">{label}</dt><dd className="break-all font-medium text-slate-900">{value}</dd></div>)}</dl><p className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">Ao confirmar, salvaremos os dados, criaremos o grupo se necessário e iniciaremos a importação do CSV. Você voltará aos detalhes do catálogo para acompanhar. A atualização automática de 8 horas continua desativada.</p></div>}
           {error && <p role="alert" className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-          <footer className="mt-7 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5"><button type="button" disabled={busy || step === 0} className={secondaryButtonClass} onClick={() => { setStep(current => current - 1); setError(''); }}><ArrowLeft className="size-4" />Anterior</button><button type="submit" disabled={busy || !selected} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : step === 3 ? <Save className="size-4" /> : null}{busy ? 'Iniciando importação…' : step === 3 ? 'Confirmar e importar' : 'Continuar'}{step < 3 && <ArrowRight className="size-4" />}</button></footer>
+          <footer className="mt-7 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5"><button type="button" disabled={busy || step === 0} className={secondaryButtonClass} onClick={() => { setStep(current => current - 1); setError(''); }}><ArrowLeft className="size-4" />Anterior</button><button type="submit" disabled={busy || !selected || (step === 3 && !settingsReady)} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : step === 3 ? <Save className="size-4" /> : null}{busy ? 'Iniciando importação…' : step === 3 ? 'Confirmar e importar' : 'Continuar'}{step < 3 && <ArrowRight className="size-4" />}</button></footer>
         </form>
       </>}
     </div></div>

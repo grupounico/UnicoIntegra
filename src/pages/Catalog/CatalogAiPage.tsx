@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Bot, CheckCircle2, Headset, Loader2, ShoppingCart } from 'lucide-react';
+import { Bot, CheckCircle2, Headset, Loader2, RefreshCw, ShoppingCart } from 'lucide-react';
 import { createDeploymentAi, getDeployment, type Deployment } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, fieldClass, labelClass, primaryButtonClass } from './catalogUi';
@@ -20,35 +20,89 @@ export default function CatalogAiPage() {
   const [name, setName] = useState('');
   const [signatureName, setSignatureName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creationUnconfirmed, setCreationUnconfirmed] = useState(false);
   const [error, setError] = useState('');
+  const [statusError, setStatusError] = useState('');
+  const [checkedAt, setCheckedAt] = useState(() => Date.now());
   const unit = deployment?.units.find(item => item.id === unitId);
   const config = unit?.atenderBemConfig;
   const ai = config?.ai;
+  const aiStatus = ai?.status;
+  const savedName = ai?.name || (unit ? `IA de Venda - ${unit.name}` : '');
+  const savedSignatureName = ai?.signatureName || unit?.name || '';
+  const startedAt = Date.parse(ai?.startedAt || '');
+  const creationDelayed = aiStatus === 'creating' && (!Number.isFinite(startedAt) || checkedAt - startedAt >= 5 * 60 * 1000);
   const instance = (() => { try { return config?.mcpUrl ? new URL(config.mcpUrl).origin : ''; } catch { return ''; } })();
   const ready = Boolean(instance && config?.groupId && (!config.import || config.import.status === 'completed'));
 
   useEffect(() => {
+    let active = true;
     void getDeployment(deploymentId).then(value => {
+      if (!active) return;
       setDeployment(value);
       setUnitId(value.units.find(item => item.id === query.get('unit'))?.id || value.units[0]?.id || '');
-    }).catch(reason => setError(reason.message));
+    }).catch(reason => { if (active) setError(reason.message); });
+    return () => { active = false; };
     // A unidade escolhida é estado local; a query só define a inicial.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deploymentId]);
   useEffect(() => {
-    if (!unit) return;
-    setName(unit.atenderBemConfig?.ai?.name || `IA de Venda - ${unit.name}`);
-    setSignatureName(unit.atenderBemConfig?.ai?.signatureName || unit.name);
-  }, [unit]);
+    setName(savedName);
+    setSignatureName(savedSignatureName);
+  }, [unitId, savedName, savedSignatureName]);
+
+  useEffect(() => {
+    if (aiStatus !== 'creating') return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const value = await getDeployment(deploymentId);
+        if (active) {
+          setDeployment(value); setStatusError(''); setCreationUnconfirmed(false);
+          if (value.units.find(item => item.id === unitId)?.atenderBemConfig?.ai?.status === 'created') setError('');
+        }
+      } catch {
+        if (active) setStatusError('Não foi possível consultar a criação. A consulta será repetida automaticamente.');
+      } finally {
+        if (active) { setCheckedAt(Date.now()); timer = setTimeout(() => void poll(), 5000); }
+      }
+    }
+    timer = setTimeout(() => void poll(), 5000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [deploymentId, unitId, aiStatus]);
+
+  async function refreshStatus() {
+    setRefreshing(true); setStatusError('');
+    try {
+      const value = await getDeployment(deploymentId);
+      setDeployment(value); setCreationUnconfirmed(false);
+      if (value.units.find(item => item.id === unitId)?.atenderBemConfig?.ai?.status === 'created') setError('');
+    }
+    catch { setStatusError('Não foi possível consultar a criação. Tente atualizar o status novamente.'); }
+    finally { setCheckedAt(Date.now()); setRefreshing(false); }
+  }
 
   async function create() {
-    if (busy || !unit) return;
+    if (busy || creationUnconfirmed || !unit) return;
     setBusy(true); setError('');
     try {
-      await createDeploymentAi(deploymentId, unit.id, { modality: 'venda', name, signatureName }, getAuthSession()?.username || 'Integra');
+      const result = await createDeploymentAi(deploymentId, unit.id, { modality: 'venda', name, signatureName }, getAuthSession()?.username || 'Integra');
+      setDeployment(current => current ? { ...current, units: current.units.map(item => item.id === unit.id && item.atenderBemConfig ? { ...item, atenderBemConfig: { ...item.atenderBemConfig, ai: result } } : item) } : current);
       setDeployment(await getDeployment(deploymentId));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar a IA.'); }
-    finally { setBusy(false); }
+    } catch (reason) {
+      setCreationUnconfirmed(true);
+      setError(reason instanceof Error ? reason.message : 'Não foi possível criar a IA.');
+      // A resposta pode se perder depois de a criação começar. Consulte o estado
+      // persistido antes de permitir outra ação; a instalação nunca é repetida aqui.
+      try {
+        const value = await getDeployment(deploymentId);
+        setDeployment(value); setCreationUnconfirmed(false);
+        if (value.units.find(item => item.id === unit.id)?.atenderBemConfig?.ai?.status === 'created') setError('');
+      } catch { setStatusError('Não foi possível confirmar o status. Atualize a página antes de tentar novamente.'); }
+    }
+    finally { setCheckedAt(Date.now()); setBusy(false); }
   }
 
   return <CatalogScreen>
@@ -77,13 +131,15 @@ export default function CatalogAiPage() {
       </section>
 
       {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
+      {statusError && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{statusError}</div>}
       {ai?.status === 'failed' && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Última tentativa falhou: {ai.error}</div>}
+      {(creationDelayed || creationUnconfirmed) && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p>A criação ainda não foi confirmada. Confira o status dos recursos no AtenderBem e atualize esta implantação.</p><button type="button" disabled={refreshing} className={`${primaryButtonClass} mt-3`} onClick={() => void refreshStatus()}>{refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar status</button></div>}
 
       {ai?.status === 'created' ? <section role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-sm text-emerald-900">
         <p className="flex items-center gap-2 font-semibold"><CheckCircle2 className="size-5" aria-hidden="true" />IA criada na instância</p>
         <p className="mt-2">Assistente {ai.assistantId} · URA {ai.supportFlows?.uraIaId || '—'} · URA AB {ai.supportFlows?.uraAbId || '—'} · Envio de produto {ai.supportFlows?.downloadImagemId || '—'} · Pré-processamento {ai.supportFlows?.preProcessId || '—'}</p>
         <p className="mt-2 text-emerald-800">Próximo passo no AtenderBem: vincular a URA à fila do WhatsApp e o funil do carrinho ao conector "Carrinho CRM".</p>
-      </section> : <button type="button" disabled={busy || !ready || ai?.status === 'creating'} className={primaryButtonClass} onClick={() => void create()}>
+      </section> : <button type="button" disabled={busy || creationUnconfirmed || !ready || ai?.status === 'creating'} className={primaryButtonClass} onClick={() => void create()}>
         {busy || ai?.status === 'creating' ? <><Loader2 className="size-4 animate-spin" />Criando assistente, URAs e automações…</> : ai?.status === 'failed' ? 'Tentar novamente' : 'Criar IA de venda'}
       </button>}
     </div></div>

@@ -1,17 +1,37 @@
 import { API_BASE } from './api';
 import { atenderBemHeaders } from './atenderBemSession';
 
-export type AssetType =
-  | 'banner_1'
-  | 'banner_2'
-  | 'banner_3'
-  | 'banner_mobile_1'
-  | 'banner_mobile_2'
-  | 'banner_mobile_3'
-  | 'logo_desktop'
-  | 'logo_mobile';
+export const CATALOG_ASSET_DEFINITIONS = Object.freeze([
+  { type: 'banner_1', label: 'Banner principal', hint: 'Imagem de destaque 1' },
+  { type: 'banner_2', label: 'Banner secundário', hint: 'Imagem de destaque 2' },
+  { type: 'banner_3', label: 'Banner complementar', hint: 'Imagem de destaque 3' },
+  { type: 'banner_mobile_1', label: 'Banner principal mobile', hint: 'Destaque 1 · 2000×800' },
+  { type: 'banner_mobile_2', label: 'Banner secundário mobile', hint: 'Destaque 2 · 2000×800' },
+  { type: 'banner_mobile_3', label: 'Banner complementar mobile', hint: 'Destaque 3 · 2000×800' },
+  { type: 'logo_desktop', label: 'Logo desktop', hint: 'Versão horizontal' },
+  { type: 'logo_mobile', label: 'Logo mobile', hint: 'Versão compacta' },
+] as const);
+
+export type AssetType = typeof CATALOG_ASSET_DEFINITIONS[number]['type'];
 
 export type CatalogFlowMode = 'full' | 'hub_banco_only';
+export type CatalogErpId = 1 | 2 | 3 | 4;
+export type CatalogProvider = 'alpha7' | 'linx' | 'automatiza' | 'vetor';
+
+export const CATALOG_ERPS = Object.freeze([
+  { id: 1 as const, provider: 'alpha7' as const, name: 'Alpha7', databaseDriver: 'postgres' as const, databaseName: 'PostgreSQL', sourceUnitLabel: 'ID da unidade no Alpha7', publicationMode: 'automatic' as const },
+  { id: 2 as const, provider: 'linx' as const, name: 'Linx', databaseDriver: null, databaseName: null, sourceUnitLabel: null, publicationMode: 'shadow' as const },
+  { id: 3 as const, provider: 'automatiza' as const, name: 'Automatiza', databaseDriver: 'mysql' as const, databaseName: 'MySQL', sourceUnitLabel: 'ID da loja no Automatiza (shop_id)', publicationMode: 'shadow' as const },
+  { id: 4 as const, provider: 'vetor' as const, name: 'Vetor', databaseDriver: null, databaseName: null, sourceUnitLabel: 'Código da filial no Vetor (cdFilial)', publicationMode: 'shadow' as const },
+]);
+
+export function catalogErp(erpId: CatalogErpId | null | undefined, provider?: CatalogProvider) {
+  return CATALOG_ERPS.find((erp) => erp.id === erpId) || CATALOG_ERPS.find((erp) => erp.provider === provider);
+}
+
+export function catalogErpName(erpId: CatalogErpId | null | undefined, provider?: CatalogProvider) {
+  return catalogErp(erpId, provider)?.name || 'ERP desconhecido';
+}
 
 export type DeploymentStatus =
   | 'draft'
@@ -59,10 +79,12 @@ export interface UnitForm {
   codigo: string;
   nome: string;
   cnpj: string;
-  sourceUnitId: number;
+  erpId: CatalogErpId;
+  sourceUnitId: number | null;
   credentialRef: string;
+  vetorApiKey: string;
   orderWebhookUrl: string;
-  provider?: 'alpha7';
+  provider?: CatalogProvider;
   pageSize?: number;
   validEanDropThresholdBps?: number;
   slug?: string;
@@ -79,8 +101,9 @@ export interface DeploymentUnit {
   cnpj: string;
   slug: string;
   isInitial: boolean;
-  provider: 'alpha7';
-  sourceUnitId: number;
+  erpId: CatalogErpId;
+  provider: CatalogProvider;
+  sourceUnitId: number | null;
   publicationMode: 'shadow' | 'automatic';
   pageSize: number;
   validEanDropThresholdBps: number;
@@ -115,6 +138,8 @@ export interface DeploymentUnit {
     delayedAt: string | null;
   } | null;
   unicommerceTenantId: string | null;
+  storefrontUrl?: string | null;
+  storefrontStatus?: string | null;
   clientId: number | null;
   bancoUnicoImportJobId: number | null;
   coveragePercent?: number | null;
@@ -251,7 +276,11 @@ export interface CreateDeploymentPayload {
   requestedBy: string;
   flowMode: CatalogFlowMode;
   group: GroupForm;
-  units: UnitForm[];
+  units: Array<Omit<UnitForm, 'sourceUnitId' | 'credentialRef' | 'vetorApiKey'> & {
+    sourceUnitId?: number | null;
+    credentialRef?: string;
+    vetorApiKey?: string;
+  }>;
 }
 
 export interface UpdateDeploymentUnitPayload {
@@ -261,12 +290,12 @@ export interface UpdateDeploymentUnitPayload {
   cnpj?: string;
   sourceUnitId?: number;
   credentialRef?: string;
+  vetorApiKey?: string;
   orderWebhookUrl?: string;
   pageSize?: number;
   validEanDropThresholdBps?: number;
 }
 
-const ASSET_TYPES: AssetType[] = ['banner_1', 'banner_2', 'banner_3', 'logo_desktop', 'logo_mobile'];
 const MOCK_STORAGE_KEY = 'unico-catalog-deployments-v2';
 
 export const CATALOG_DEMO_MODE = import.meta.env.VITE_CATALOG_MOCK === 'true'
@@ -326,15 +355,16 @@ export async function saveAtenderBemConfiguration(deploymentId: string, unitId: 
   return request(`/api/v1/deployments/${deploymentId}/units/${unitId}/atenderbem`, { method: 'PUT', headers: atenderBemHeaders(), body: JSON.stringify({ ...input, requestedBy }) });
 }
 
-function makeUnit(deploymentId: string, input: UnitForm): DeploymentUnit {
+function makeUnit(deploymentId: string, input: CreateDeploymentPayload['units'][number]): DeploymentUnit {
   const slugBase = input.slug || `${input.nome}-${input.codigo}`;
+  const erp = CATALOG_ERPS.find((item) => item.id === input.erpId) || CATALOG_ERPS[0];
   return {
     id: uuid(), deploymentId, code: input.codigo, name: input.nome, cnpj: input.cnpj.replace(/\D/g, ''),
     slug: slugBase.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
-    isInitial: input.initial === true, provider: 'alpha7', sourceUnitId: input.sourceUnitId,
-    publicationMode: 'automatic', pageSize: input.pageSize ?? 500,
-    validEanDropThresholdBps: input.validEanDropThresholdBps ?? 1000,
-    hasCredential: Boolean(input.credentialRef), hasOrderWebhookUrl: Boolean(input.orderWebhookUrl), status: 'pending',
+    isInitial: input.initial === true, erpId: erp.id, provider: erp.provider, sourceUnitId: erp.sourceUnitLabel ? input.sourceUnitId ?? null : null,
+    publicationMode: erp.publicationMode, pageSize: erp.id === 2 ? 500 : input.pageSize ?? 500,
+    validEanDropThresholdBps: erp.id === 2 ? 1000 : input.validEanDropThresholdBps ?? 1000,
+    hasCredential: Boolean(erp.databaseDriver ? input.credentialRef : erp.id === 4 && input.vetorApiKey), hasOrderWebhookUrl: Boolean(input.orderWebhookUrl), status: 'pending',
     hubSellerUnitId: null, hubIntegrationId: null, latestRunId: null, latestRunStatus: null,
     latestValidRows: null, latestRunFinishedAt: null, unicommerceTenantId: null, clientId: null,
     bancoUnicoImportJobId: null, lastErrorCode: null, lastErrorMessage: null, retryable: false,
@@ -342,7 +372,7 @@ function makeUnit(deploymentId: string, input: UnitForm): DeploymentUnit {
 }
 
 function assetsFor(deploymentId: string, confirmed = false): DeploymentAsset[] {
-  return ASSET_TYPES.map((type) => ({
+  return CATALOG_ASSET_DEFINITIONS.map(({ type }) => ({
     id: uuid(), deploymentId, type, uploadId: confirmed ? `upload-${type}` : null,
     objectKey: confirmed ? `demo/${deploymentId}/${type}.png` : null, publicUrl: null,
     mimeType: confirmed ? 'image/png' : null, sizeBytes: confirmed ? 128000 : null,
@@ -359,15 +389,15 @@ function demoDeployment(input: {
   const createdAt = new Date(Date.now() - input.ageHours * 3_600_000).toISOString();
   const units = input.unitNames.map((name, index) => makeUnit(id, {
     codigo: index === 0 ? 'MATRIZ' : `FILIAL-${index}`, nome: name, cnpj: input.cnpj,
-    sourceUnitId: index + 1, credentialRef: 'postgresql://demo:demo@localhost:5432/catalogo',
+    erpId: 1, sourceUnitId: index + 1, credentialRef: 'postgresql://demo:demo@localhost:5432/catalogo',
     orderWebhookUrl: `https://pedidos.example.com/webhooks/${index + 1}`, initial: index === 0,
   }));
   units.forEach((unit) => {
     unit.status = input.status === 'completed' ? 'active'
       : input.status === 'awaiting_activation' ? 'awaiting_activation'
         : input.status === 'failed' ? 'failed' : 'running';
-    unit.latestValidRows = input.status === 'awaiting_activation' || input.status === 'completed' ? 12840 + unit.sourceUnitId * 761 : null;
-    unit.unicommerceTenantId = input.status === 'awaiting_activation' || input.status === 'completed' ? `tenant-${unit.sourceUnitId}` : null;
+    unit.latestValidRows = input.status === 'awaiting_activation' || input.status === 'completed' ? 12840 + (unit.sourceUnitId || 0) * 761 : null;
+    unit.unicommerceTenantId = input.status === 'awaiting_activation' || input.status === 'completed' ? `tenant-${unit.sourceUnitId || unit.id}` : null;
     if (input.error) {
       unit.lastErrorCode = input.error.code;
       unit.lastErrorMessage = input.error.message;
@@ -407,7 +437,12 @@ function seedMocks(): Deployment[] {
 
 function readMocks() {
   const raw = localStorage.getItem(MOCK_STORAGE_KEY);
-  if (raw) return JSON.parse(raw) as Deployment[];
+  if (raw) return (JSON.parse(raw) as Deployment[]).map((deployment) => {
+    if (deployment.flowMode !== 'full') return deployment;
+    const existing = deployment.assets;
+    const missing = assetsFor(deployment.id).filter((asset) => !existing.some((current) => current.type === asset.type));
+    return missing.length ? { ...deployment, assets: [...existing, ...missing] } : deployment;
+  });
   const seeded = seedMocks();
   localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(seeded));
   return seeded;
@@ -425,7 +460,7 @@ function evolveMock(deployment: Deployment): Deployment {
     : elapsed < 2 ? 'queued' : elapsed < 5 ? 'provisioning_hub' : elapsed < 8 ? 'validating_hub_catalog' : elapsed < 11 ? 'provisioning_unicommerce' : elapsed < 14 ? 'importing_banco_unico' : 'awaiting_activation';
   if (next === deployment.status) return deployment;
   const updated = { ...deployment, status: next, currentStage: next, updatedAt: new Date().toISOString() };
-  updated.units = deployment.units.map((unit) => ({ ...unit, status: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 'banco_unico_ready' : next === 'awaiting_activation' ? 'awaiting_activation' : next === 'importing_banco_unico' ? 'banco_unico_importing' : next === 'provisioning_unicommerce' ? 'unicommerce_tenant_created' : 'running', latestValidRows: ['awaiting_activation', 'completed'].includes(next) ? 13601 : unit.latestValidRows, coveragePercent: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 100 : unit.coveragePercent, unicommerceTenantId: next === 'awaiting_activation' ? `tenant-${unit.sourceUnitId}` : unit.unicommerceTenantId }));
+  updated.units = deployment.units.map((unit) => ({ ...unit, status: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 'banco_unico_ready' : next === 'awaiting_activation' ? 'awaiting_activation' : next === 'importing_banco_unico' ? 'banco_unico_importing' : next === 'provisioning_unicommerce' ? 'unicommerce_tenant_created' : 'running', latestValidRows: ['awaiting_activation', 'completed'].includes(next) ? 13601 : unit.latestValidRows, coveragePercent: next === 'completed' && deployment.flowMode === 'hub_banco_only' ? 100 : unit.coveragePercent, unicommerceTenantId: next === 'awaiting_activation' ? `tenant-${unit.id}` : unit.unicommerceTenantId }));
   updated.events = [...deployment.events, { id: uuid(), deploymentId: deployment.id, unitId: null, eventType: `deployment_${next}`, fromStatus: deployment.status, toStatus: next, createdBy: 'Sistema', createdAt: new Date().toISOString() }];
   return updated;
 }
@@ -499,7 +534,7 @@ export async function updateDeploymentUnit(id: string, unitId: string, payload: 
     const now = new Date().toISOString();
     const updatedUnits = deployment.units.map((unit) => {
       if (unit.id !== unitId) return unit;
-      const hubConfigurationChanged = Boolean(payload.credentialRef)
+      const hubConfigurationChanged = Boolean(payload.credentialRef || payload.vetorApiKey)
         || (payload.pageSize !== undefined && payload.pageSize !== unit.pageSize)
         || (payload.validEanDropThresholdBps !== undefined && payload.validEanDropThresholdBps !== unit.validEanDropThresholdBps);
       return {
@@ -510,7 +545,7 @@ export async function updateDeploymentUnit(id: string, unitId: string, payload: 
         sourceUnitId: payload.sourceUnitId ?? unit.sourceUnitId,
         pageSize: payload.pageSize ?? unit.pageSize,
         validEanDropThresholdBps: payload.validEanDropThresholdBps ?? unit.validEanDropThresholdBps,
-        hasCredential: payload.credentialRef ? true : unit.hasCredential,
+        hasCredential: payload.credentialRef || payload.vetorApiKey ? true : unit.hasCredential,
         hasOrderWebhookUrl: payload.orderWebhookUrl ? true : unit.hasOrderWebhookUrl,
         status: hubConfigurationChanged && unit.hubIntegrationId ? 'integration_created' as UnitStatus : unit.status === 'failed' ? (payload.orderWebhookUrl && unit.hubIntegrationId && (unit.unicommerceTenantId || Number(unit.latestValidRows || 0) > 0) ? 'catalog_active' : unit.hubIntegrationId ? 'scheduled' : unit.hubSellerUnitId ? 'hub_unit_created' : 'pending') : unit.status,
         latestRunId: hubConfigurationChanged ? null : unit.latestRunId,
@@ -527,7 +562,7 @@ export async function updateDeploymentUnit(id: string, unitId: string, payload: 
       units: updatedUnits,
       retryable: true,
       updatedAt: now,
-      events: [...deployment.events, { id: uuid(), deploymentId: id, unitId, eventType: 'unit_configuration_updated', fromStatus: deployment.units.find((unit) => unit.id === unitId)?.status ?? null, toStatus: updatedUnits.find((unit) => unit.id === unitId)?.status ?? null, safeMetadata: { valuesProtected: Boolean(payload.credentialRef || payload.orderWebhookUrl) }, createdBy: payload.requestedBy, createdAt: now }],
+      events: [...deployment.events, { id: uuid(), deploymentId: id, unitId, eventType: 'unit_configuration_updated', fromStatus: deployment.units.find((unit) => unit.id === unitId)?.status ?? null, toStatus: updatedUnits.find((unit) => unit.id === unitId)?.status ?? null, safeMetadata: { valuesProtected: Boolean(payload.credentialRef || payload.vetorApiKey || payload.orderWebhookUrl) }, createdBy: payload.requestedBy, createdAt: now }],
     };
   });
 }
@@ -540,11 +575,18 @@ async function sha256(file: File) {
 export async function uploadDeploymentAsset(deploymentId: string, type: AssetType, file: File): Promise<Deployment> {
   const checksumSha256 = await sha256(file);
   if (CATALOG_DEMO_MODE) {
-    return mockUpdate(deploymentId, (deployment) => ({
-      ...deployment,
-      assets: deployment.assets.map((asset) => asset.type === type ? { ...asset, status: 'confirmed', uploadId: `upload-${uuid()}`, objectKey: `demo/${deploymentId}/${file.name}`, mimeType: file.type, sizeBytes: file.size, checksumSha256 } : asset),
-      updatedAt: new Date().toISOString(),
-    }));
+    return mockUpdate(deploymentId, (deployment) => {
+      if (deployment.flowMode !== 'full') throw new Error('O fluxo somente catálogo não utiliza imagens.');
+      const current = deployment.assets.find((asset) => asset.type === type);
+      const template = current ?? assetsFor(deploymentId).find((asset) => asset.type === type);
+      if (!template) throw new Error('Tipo de imagem não reconhecido.');
+      const confirmed: DeploymentAsset = { ...template, status: 'confirmed', uploadId: `upload-${uuid()}`, objectKey: `demo/${deploymentId}/${file.name}`, mimeType: file.type, sizeBytes: file.size, checksumSha256 };
+      return {
+        ...deployment,
+        assets: current ? deployment.assets.map((asset) => asset.type === type ? confirmed : asset) : [...deployment.assets, confirmed],
+        updatedAt: new Date().toISOString(),
+      };
+    });
   }
   const presigned = await request<{ assets: Array<{ type: AssetType; uploadId: string; objectKey: string; uploadUrl: string }> }>(`/api/v1/deployments/${deploymentId}/assets/presign`, { method: 'POST', body: JSON.stringify({ assets: [{ type, mimeType: file.type, sizeBytes: file.size }] }) }, true);
   const target = presigned.assets.find((asset) => asset.type === type);
@@ -572,6 +614,17 @@ async function simpleAction(id: string, path: string, requestedBy: string) {
 export const retryDeployment = (id: string, requestedBy: string) => simpleAction(id, '/retry', requestedBy);
 export const retryUnit = (id: string, unitId: string, requestedBy: string) => simpleAction(id, `/units/${unitId}/retry`, requestedBy);
 export const runUnit = (id: string, unitId: string, requestedBy: string) => simpleAction(id, `/units/${unitId}/run`, requestedBy);
+
+export async function retryUnitShadowActivation(id: string, unitId: string) {
+  if (!CATALOG_DEMO_MODE) return request<Deployment>(`/api/v1/deployments/${id}/units/${unitId}/activate-shadow`, { method: 'POST', body: '{}' }, true);
+  return mockUpdate(id, (deployment) => ({
+    ...deployment,
+    status: 'validating_hub_catalog',
+    currentStage: 'activating_shadow',
+    units: deployment.units.map((unit) => unit.id === unitId ? { ...unit, status: 'activating_shadow', latestRunStatus: 'activation_requested' } : unit),
+    updatedAt: new Date().toISOString(),
+  }));
+}
 
 export async function activateTenants(id: string, requestedBy: string) {
   if (!CATALOG_DEMO_MODE) return request<Deployment>(`/api/v1/deployments/${id}/activate-tenants`, { method: 'POST', body: JSON.stringify({ requestedBy }) }, true);
