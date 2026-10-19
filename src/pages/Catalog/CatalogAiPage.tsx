@@ -34,7 +34,7 @@ export default function CatalogAiPage() {
   const startedAt = Date.parse(ai?.startedAt || '');
   const creationDelayed = aiStatus === 'creating' && (!Number.isFinite(startedAt) || checkedAt - startedAt >= 5 * 60 * 1000);
   const instance = (() => { try { return config?.mcpUrl ? new URL(config.mcpUrl).origin : ''; } catch { return ''; } })();
-  const ready = Boolean(instance && config?.groupId && (!config.import || config.import.status === 'completed'));
+  const ready = Boolean(instance && config?.groupId && config.import?.status === 'completed');
 
   useEffect(() => {
     let active = true;
