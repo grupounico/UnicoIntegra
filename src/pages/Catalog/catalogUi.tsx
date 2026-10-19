@@ -70,7 +70,7 @@ export function CatalogPageHeader({ title, description, action, backTo }: { titl
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-lg font-semibold tracking-[-0.025em] text-slate-950">{title}</h1>
-              {CATALOG_DEMO_MODE ? <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700"><FlaskConical className="size-3" />Demonstração</span> : null}
+              {CATALOG_DEMO_MODE ? <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700"><FlaskConical className="size-3" />Demonstração</span> : import.meta.env.VITE_CATALOG_ENVIRONMENT === 'staging' ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800"><FlaskConical className="size-3" />Staging · dados reais</span> : null}
             </div>
             <p className="mt-0.5 truncate text-xs text-slate-500">{description}</p>
           </div>

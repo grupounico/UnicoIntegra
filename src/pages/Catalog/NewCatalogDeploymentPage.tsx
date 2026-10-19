@@ -1,28 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Eye, EyeOff, FileImage, ImagePlus, Info, Loader2, Plus, Trash2, UploadCloud } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
-import { createDeployment, startDeployment, uploadDeploymentAsset, type AssetType, type Deployment, type GroupForm, type UnitForm } from '../../services/catalogDeployment.service';
-import { databaseConnectionErrorMessage, testDatabaseConnectionUrl } from '../../services/database.service';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { CATALOG_ASSET_DEFINITIONS as assetDefinitions, CATALOG_ERPS, catalogErp, catalogErpName, createDeployment, getDeployment, startDeployment, uploadDeploymentAsset, type AssetType, type CatalogErpId, type CreateDeploymentPayload, type Deployment, type GroupForm, type UnitForm } from '../../services/catalogDeployment.service';
+import { databaseConnectionPayloadFromUrl } from '../../services/database.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, fieldClass, formatCnpj, labelClass, primaryButtonClass, secondaryButtonClass } from './catalogUi';
+import { hasValidCatalogConnection, useCatalogConnectionChecks, type CatalogConnectionCheck } from './useCatalogConnectionChecks';
 
 type FormErrors = Record<string, string>;
 type UploadState = Record<AssetType, { state: 'idle' | 'uploading' | 'confirmed' | 'error'; fileName?: string; preview?: string; message?: string }>;
-type ConnectionCheck = { state: 'idle' | 'validating' | 'valid' | 'error'; credentialRef?: string; message?: string };
+type NewUnitForm = Omit<UnitForm, 'erpId'> & { localId: string; erpId: CatalogErpId | null };
 
-const assetDefinitions: Array<{ type: AssetType; label: string; hint: string }> = [
-  { type: 'banner_1', label: 'Banner principal', hint: 'Imagem de destaque 1' },
-  { type: 'banner_2', label: 'Banner secundário', hint: 'Imagem de destaque 2' },
-  { type: 'banner_3', label: 'Banner complementar', hint: 'Imagem de destaque 3' },
-  { type: 'banner_mobile_1', label: 'Banner principal mobile', hint: 'Destaque 1 · 2000×800' },
-  { type: 'banner_mobile_2', label: 'Banner secundário mobile', hint: 'Destaque 2 · 2000×800' },
-  { type: 'banner_mobile_3', label: 'Banner complementar mobile', hint: 'Destaque 3 · 2000×800' },
-  { type: 'logo_desktop', label: 'Logo desktop', hint: 'Versão horizontal' },
-  { type: 'logo_mobile', label: 'Logo mobile', hint: 'Versão compacta' },
-];
-
-function newUnit(index = 0): UnitForm {
-  return { codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', slug: '', sourceUnitId: index + 1, credentialRef: '', orderWebhookUrl: '', provider: 'alpha7', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
+function newUnit(index = 0): NewUnitForm {
+  return { localId: crypto.randomUUID(), codigo: index === 0 ? 'MATRIZ' : '', nome: '', cnpj: '', slug: '', erpId: null, sourceUnitId: null, credentialRef: '', vetorApiKey: '', orderWebhookUrl: '', pageSize: 500, validEanDropThresholdBps: 1000, initial: index === 0 };
 }
 
 function isValidCnpj(value: string) {
@@ -53,7 +43,7 @@ function validateGroup(group: GroupForm) {
   return errors;
 }
 
-function validateUnits(units: UnitForm[], connectionChecks: Record<number, ConnectionCheck>, hubOnly = false) {
+function validateUnits(units: NewUnitForm[], connectionChecks: Record<string, CatalogConnectionCheck>, hubOnly = false) {
   const errors: FormErrors = {};
   const codes = new Set<string>();
   const sourceIds = new Set<number>();
@@ -68,19 +58,24 @@ function validateUnits(units: UnitForm[], connectionChecks: Record<number, Conne
     if (!unit.nome.trim()) errors[`${prefix}-nome`] = 'Informe o nome da unidade.';
     if (unit.slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(unit.slug)) errors[`${prefix}-slug`] = 'Use letras minúsculas, números e hífens.';
     if (!isValidCnpj(unit.cnpj)) errors[`${prefix}-cnpj`] = 'Informe um CNPJ válido.';
-    if (!Number.isInteger(Number(unit.sourceUnitId)) || Number(unit.sourceUnitId) <= 0) errors[`${prefix}-source`] = 'Use um número inteiro positivo.';
-    else if (sourceIds.has(Number(unit.sourceUnitId))) errors[`${prefix}-source`] = 'Este ID já está em uso.';
-    sourceIds.add(Number(unit.sourceUnitId));
-    try {
-      const url = new URL(unit.credentialRef);
-      if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.username || !url.pathname.slice(1)) throw new Error();
-    } catch {
-      errors[`${prefix}-credential`] = 'Use uma URL PostgreSQL completa e válida.';
+    const erp = catalogErp(unit.erpId);
+    if (!erp) errors[`${prefix}-erp`] = 'Escolha o ERP da unidade.';
+    if (erp?.sourceUnitLabel) {
+      if (!Number.isSafeInteger(Number(unit.sourceUnitId)) || Number(unit.sourceUnitId) <= 0) errors[`${prefix}-source`] = 'Use um número inteiro positivo.';
+      else if (erp.id === 1 && sourceIds.has(Number(unit.sourceUnitId))) errors[`${prefix}-source`] = 'Este ID já está em uso.';
+      if (erp.id === 1) sourceIds.add(Number(unit.sourceUnitId));
     }
-    const connectionCheck = connectionChecks[index];
-    if (connectionCheck?.state !== 'valid' || connectionCheck.credentialRef !== unit.credentialRef.trim()) {
-      errors[`${prefix}-connection`] = 'Valide a conexão com o banco antes de prosseguir.';
+    if (erp?.databaseDriver) {
+      try {
+        databaseConnectionPayloadFromUrl(unit.credentialRef, unit.cnpj, { driver: erp.databaseDriver, sourceUnitId: Number(unit.sourceUnitId) });
+      } catch {
+        errors[`${prefix}-credential`] = `Use uma URL ${erp.databaseName} completa e válida, incluindo usuário e senha.`;
+      }
+      if (!hasValidCatalogConnection(connectionChecks[unit.localId], { driver: erp.databaseDriver, credentialRef: unit.credentialRef, cnpj: unit.cnpj, sourceUnitId: unit.sourceUnitId })) {
+        errors[`${prefix}-connection`] = 'Valide a conexão com o banco antes de prosseguir.';
+      }
     }
+    if (erp?.id === 4 && (unit.vetorApiKey.trim().length < 8 || unit.vetorApiKey.trim().length > 2048 || /[\r\n]/.test(unit.vetorApiKey))) errors[`${prefix}-apiKey`] = 'Informe uma API key do Vetor entre 8 e 2048 caracteres, sem quebras de linha.';
     if (!hubOnly) {
       if (!unit.orderWebhookUrl.trim()) {
         errors[`${prefix}-webhook`] = 'Informe a URL HTTPS que receberá os pedidos.';
@@ -112,61 +107,101 @@ function Stepper({ step, hubOnly }: { step: number; hubOnly: boolean }) {
 
 export default function NewCatalogDeploymentPage() {
   const navigate = useNavigate();
+  const { deploymentId: resumeId } = useParams();
+  const loadedId = useRef<string | null>(null);
+  const [resuming, setResuming] = useState(Boolean(resumeId));
   const session = getAuthSession();
   const requestedBy = session?.username || session?.authUsername || 'Operador Unico';
   const [step, setStep] = useState(1);
   const [group, setGroup] = useState<GroupForm>({ cnpj: '', nome: '', username: '' });
   const [hubOnly, setHubOnly] = useState(false);
-  const [units, setUnits] = useState<UnitForm[]>([newUnit()]);
+  const [units, setUnits] = useState<NewUnitForm[]>(() => [newUnit()]);
   const [errors, setErrors] = useState<FormErrors>({});
   const [expanded, setExpanded] = useState(0);
-  const [showCredentials, setShowCredentials] = useState<Record<number, boolean>>({});
-  const [connectionChecks, setConnectionChecks] = useState<Record<number, ConnectionCheck>>({});
+  const [showCredentials, setShowCredentials] = useState<Record<string, boolean>>({});
+  const { checks: connectionChecks, invalidate: invalidateConnection, validateConnection: checkConnection } = useCatalogConnectionChecks();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [uploads, setUploads] = useState<UploadState>(() => Object.fromEntries(assetDefinitions.map(({ type }) => [type, { state: 'idle' }])) as UploadState);
 
-  const confirmedCount = deployment?.assets.filter((asset) => asset.status === 'confirmed').length ?? 0;
+  const confirmedCount = assetDefinitions.filter(({ type }) => deployment?.assets.some((asset) => asset.type === type && asset.status === 'confirmed')).length;
   const allConfirmed = confirmedCount === assetDefinitions.length;
   const groupSummary = useMemo(() => group.nome.trim() || 'Novo grupo', [group.nome]);
 
-  function changeUnit(index: number, patch: Partial<UnitForm>) {
+  useEffect(() => {
+    if (!resumeId || loadedId.current === resumeId) return;
+    let active = true;
+    setResuming(true);
+    setSubmitError('');
+    void getDeployment(resumeId).then((result) => {
+      if (!active) return;
+      if (result.status !== 'draft' || result.flowMode !== 'full') {
+        navigate(`/main/catalogo/${result.id}`, { replace: true });
+        return;
+      }
+      loadedId.current = result.id;
+      setDeployment(result);
+      setHubOnly(false);
+      setGroup({ cnpj: formatCnpj(result.groupCnpj), nome: result.groupName, username: result.username });
+      setUnits(result.units.map((unit, index) => ({
+        ...newUnit(index), localId: unit.id, codigo: unit.code, nome: unit.name, cnpj: formatCnpj(unit.cnpj),
+        slug: unit.slug, erpId: unit.erpId, provider: unit.provider, sourceUnitId: unit.sourceUnitId,
+        pageSize: unit.pageSize, validEanDropThresholdBps: unit.validEanDropThresholdBps, initial: unit.isInitial,
+      })));
+      setUploads(Object.fromEntries(assetDefinitions.map(({ type }) => [type, { state: 'idle' }])) as UploadState);
+      setStep(3);
+    }).catch((caught) => {
+      if (active) setSubmitError(caught instanceof Error ? caught.message : 'Não foi possível carregar as imagens do rascunho.');
+    }).finally(() => { if (active) setResuming(false); });
+    return () => { active = false; };
+  }, [resumeId, navigate]);
+
+  function changeUnit(index: number, patch: Partial<NewUnitForm>) {
     setUnits((current) => current.map((unit, unitIndex) => unitIndex === index ? { ...unit, ...patch } : unit));
-    if (patch.credentialRef !== undefined) {
-      setConnectionChecks((current) => ({ ...current, [index]: { state: 'idle' } }));
+    if (patch.credentialRef !== undefined || patch.cnpj !== undefined || patch.sourceUnitId !== undefined || patch.erpId !== undefined) {
+      invalidateConnection(units[index].localId);
     }
     setErrors({});
+  }
+
+  function changeErp(index: number, erpId: CatalogErpId) {
+    const erp = CATALOG_ERPS.find((item) => item.id === erpId)!;
+    changeUnit(index, {
+      erpId,
+      provider: erp.provider,
+      sourceUnitId: erpId === 1 ? index + 1 : null,
+      credentialRef: '',
+      vetorApiKey: '',
+      pageSize: 500,
+      validEanDropThresholdBps: 1000,
+    });
+    setShowCredentials((current) => ({ ...current, [units[index].localId]: false }));
   }
 
   async function validateConnection(index: number) {
     const unit = units[index];
     if (!unit) return;
-    const credentialRef = unit.credentialRef.trim();
-    setConnectionChecks((current) => ({ ...current, [index]: { state: 'validating', credentialRef } }));
+    const driver = catalogErp(unit.erpId)?.databaseDriver;
+    if (!driver) return;
     setErrors((current) => ({ ...current, [`unit-${index}-credential`]: '', [`unit-${index}-connection`]: '' }));
-    try {
-      const result = await testDatabaseConnectionUrl(credentialRef, unit.cnpj);
-      setConnectionChecks((current) => current[index]?.state === 'validating' && current[index]?.credentialRef === credentialRef
-        ? { ...current, [index]: { state: 'valid', credentialRef, message: `${result.message} (${result.latencyMs} ms)` } }
-        : current);
-    } catch (caught) {
-      setConnectionChecks((current) => current[index]?.state === 'validating' && current[index]?.credentialRef === credentialRef
-        ? { ...current, [index]: { state: 'error', credentialRef, message: databaseConnectionErrorMessage(caught) } }
-        : current);
-    }
+    await checkConnection(unit.localId, { driver, credentialRef: unit.credentialRef, cnpj: unit.cnpj, sourceUnitId: unit.sourceUnitId });
   }
 
   function removeUnit(index: number) {
+    const localId = units[index].localId;
+    invalidateConnection(localId);
+    setShowCredentials((current) => {
+      const next = { ...current };
+      delete next[localId];
+      return next;
+    });
     setUnits((current) => {
       const remaining = current.filter((_, unitIndex) => unitIndex !== index);
       if (!remaining.some((item) => item.initial) && remaining[0]) remaining[0] = { ...remaining[0], initial: true };
       return remaining;
     });
-    setConnectionChecks((current) => Object.fromEntries(Object.entries(current)
-      .filter(([key]) => Number(key) !== index)
-      .map(([key, value]) => [Number(key) > index ? Number(key) - 1 : Number(key), value])));
     setExpanded(0);
   }
 
@@ -193,10 +228,20 @@ export default function NewCatalogDeploymentPage() {
     setSaving(true);
     setSubmitError('');
     try {
-      const normalizedUnits = units.map((unit, index) => ({ ...unit, codigo: unit.codigo.trim(), nome: unit.nome.trim(), cnpj: unit.cnpj.replace(/\D/g, ''), sourceUnitId: Number(unit.sourceUnitId), credentialRef: unit.credentialRef.trim(), orderWebhookUrl: unit.orderWebhookUrl.trim(), pageSize: Number(unit.pageSize), validEanDropThresholdBps: Number(unit.validEanDropThresholdBps), initial: units.some((item) => item.initial) ? unit.initial : index === 0 }));
-      const created = await createDeployment({ requestedBy, flowMode: hubOnly ? 'hub_banco_only' : 'full', group: { ...group, cnpj: group.cnpj.replace(/\D/g, ''), nome: group.nome.trim(), username: group.username.trim() }, units: normalizedUnits.map((unit) => hubOnly ? { ...unit, orderWebhookUrl: '' } : unit) });
+      const normalizedUnits: CreateDeploymentPayload['units'] = units.map((unit, index) => {
+        const erp = catalogErp(unit.erpId)!;
+        const common = { codigo: unit.codigo.trim(), nome: unit.nome.trim(), cnpj: unit.cnpj.replace(/\D/g, ''), erpId: erp.id, orderWebhookUrl: hubOnly ? '' : unit.orderWebhookUrl.trim(), pageSize: erp.id === 2 ? 500 : Number(unit.pageSize), validEanDropThresholdBps: erp.id === 2 ? 1000 : Number(unit.validEanDropThresholdBps), slug: unit.slug, initial: units.some((item) => item.initial) ? unit.initial : index === 0 };
+        if (erp.databaseDriver) return { ...common, sourceUnitId: Number(unit.sourceUnitId), credentialRef: unit.credentialRef.trim() };
+        if (erp.id === 4) return { ...common, sourceUnitId: Number(unit.sourceUnitId), vetorApiKey: unit.vetorApiKey.trim() };
+        return common;
+      });
+      const created = await createDeployment({ requestedBy, flowMode: hubOnly ? 'hub_banco_only' : 'full', group: { ...group, cnpj: group.cnpj.replace(/\D/g, ''), nome: group.nome.trim(), username: group.username.trim() }, units: normalizedUnits });
       setDeployment(created);
+      loadedId.current = created.id;
+      units.forEach((unit) => invalidateConnection(unit.localId));
+      setUnits((current) => current.map((unit) => ({ ...unit, credentialRef: '', vetorApiKey: '' })));
       setStep(3);
+      if (!hubOnly) navigate(`/main/catalogo/${created.id}/imagens`, { replace: true });
     } catch (caught) {
       setSubmitError(caught instanceof Error ? caught.message : 'Não foi possível criar o rascunho.');
     } finally {
@@ -218,7 +263,15 @@ export default function NewCatalogDeploymentPage() {
     setUploads((current) => ({ ...current, [type]: { state: 'uploading', fileName: file.name, preview } }));
     try {
       const updated = await uploadDeploymentAsset(deployment.id, type, file);
-      setDeployment(updated);
+      const confirmedAsset = updated.assets.find((asset) => asset.type === type && asset.status === 'confirmed');
+      if (!confirmedAsset) throw new Error('O envio não foi confirmado. Selecione a imagem para tentar novamente.');
+      setDeployment((current) => current?.id === updated.id ? {
+        ...current,
+        updatedAt: updated.updatedAt,
+        assets: current.assets.some((asset) => asset.type === type)
+          ? current.assets.map((asset) => asset.type === type ? confirmedAsset : asset)
+          : [...current.assets, confirmedAsset],
+      } : current);
       setUploads((current) => ({ ...current, [type]: { state: 'confirmed', fileName: file.name, preview } }));
     } catch (caught) {
       setUploads((current) => ({ ...current, [type]: { state: 'error', fileName: file.name, preview, message: caught instanceof Error ? caught.message : 'Falha no envio.' } }));
@@ -238,9 +291,16 @@ export default function NewCatalogDeploymentPage() {
     }
   }
 
+  if (resumeId && (resuming || loadedId.current !== resumeId)) return <CatalogScreen>
+    <CatalogPageHeader title="Identidade visual" description="Retome o envio das imagens do catálogo." backTo={`/main/catalogo/${resumeId}`} />
+    <main className="flex flex-1 flex-col items-center justify-center gap-4 p-6">
+      {resuming ? <Loader2 className="size-6 animate-spin text-primary" /> : <><p role="alert" className="text-sm text-rose-700">{submitError || 'Não foi possível abrir este rascunho.'}</p><Link to={`/main/catalogo/${resumeId}`} className={secondaryButtonClass}>Voltar ao acompanhamento</Link></>}
+    </main>
+  </CatalogScreen>;
+
   return (
     <CatalogScreen>
-      <CatalogPageHeader title="Novo catálogo" description={hubOnly ? 'Configure uma carga no Hub e Banco Único.' : 'Configure o grupo, as unidades e a identidade visual.'} backTo="/main/catalogo" />
+      <CatalogPageHeader title={resumeId ? 'Identidade visual' : 'Novo catálogo'} description={resumeId ? `Complete as imagens de ${groupSummary}.` : hubOnly ? 'Configure uma carga no Hub e Banco Único.' : 'Configure o grupo, as unidades e a identidade visual.'} backTo={resumeId ? `/main/catalogo/${resumeId}` : '/main/catalogo'} />
       <Stepper step={step} hubOnly={hubOnly} />
       <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto grid w-full max-w-[1200px] gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:px-10 lg:py-8">
@@ -258,24 +318,31 @@ export default function NewCatalogDeploymentPage() {
 
             {step === 2 ? <form onSubmit={(event) => void createDraft(event)}>
               <div className="rounded-xl border border-[#dbe3ef] bg-white">
-                <div className="flex items-start justify-between gap-4 border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><div><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 2 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Unidades da implantação</h2><p className="mt-1 text-sm leading-6 text-slate-500">Informe a origem dos produtos de cada unidade Alpha7.</p></div><button type="button" onClick={() => { setUnits((current) => [...current, newUnit(current.length)]); setExpanded(units.length); }} className={`${secondaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Adicionar unidade</span></button></div>
+                <div className="flex items-start justify-between gap-4 border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><div><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 2 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Unidades da implantação</h2><p className="mt-1 text-sm leading-6 text-slate-500">Escolha o ERP de origem de cada unidade.</p></div><button type="button" onClick={() => { setUnits((current) => [...current, newUnit(current.length)]); setExpanded(units.length); }} className={`${secondaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Adicionar unidade</span></button></div>
                 <label className="m-5 flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-blue-200 bg-blue-50 p-4 sm:mx-6"><span><span className="block text-sm font-semibold text-blue-950">Subir somente catálogo</span><span className="mt-1 block text-xs leading-5 text-blue-800">Hub Único + Banco Único, sem criar Unicommerce, imagens ou Vercel.</span></span><span className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${hubOnly ? 'bg-primary' : 'bg-slate-300'}`}><input type="checkbox" checked={hubOnly} onChange={(event) => setHubOnly(event.target.checked)} className="sr-only" /><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition ${hubOnly ? 'left-6' : 'left-1'}`} /></span></label>
                 {errors.units ? <div className="m-5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{errors.units}</div> : null}
                 <div className="divide-y divide-[#dbe3ef]">{units.map((unit, index) => {
                   const isOpen = expanded === index;
-                  const connectionCheck = connectionChecks[index] || { state: 'idle' as const };
-                  return <article key={index}>
+                  const connectionCheck = connectionChecks[unit.localId] || { state: 'idle' as const };
+                  const erp = catalogErp(unit.erpId);
+                  return <article key={unit.localId}>
                     <button type="button" onClick={() => setExpanded(isOpen ? -1 : index)} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 sm:px-6"><span className="flex min-w-0 items-center gap-3"><span className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold ${unit.initial ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-900">{unit.nome || `Unidade ${index + 1}`}</span><span className="mt-0.5 block text-xs text-slate-500">{unit.codigo || 'Código pendente'}{unit.initial ? ' · Unidade inicial' : ''}</span></span></span>{isOpen ? <ChevronUp className="size-4 text-slate-400" /> : <ChevronDown className="size-4 text-slate-400" />}</button>
                     {isOpen ? <div className="grid gap-5 bg-slate-50/70 px-5 py-5 sm:grid-cols-2 sm:px-6">
                       <label className={labelClass}>Código da unidade<input value={unit.codigo} onChange={(event) => changeUnit(index, { codigo: event.target.value.toUpperCase() })} className={fieldClass} maxLength={100} placeholder="MATRIZ" /><FieldError message={errors[`unit-${index}-codigo`]} /></label>
                       <label className={labelClass}>Nome da unidade<input value={unit.nome} onChange={(event) => changeUnit(index, { nome: event.target.value })} className={fieldClass} maxLength={255} placeholder="Farmácia Matriz" /><FieldError message={errors[`unit-${index}-nome`]} /></label>
                       <label className={labelClass}>Slug do tenant<input value={unit.slug || ''} onChange={(event) => changeUnit(index, { slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} className={fieldClass} maxLength={100} placeholder="whatsapp-rede-saude" /><p className="mt-1.5 text-xs text-slate-500">Opcional; quando informado, será preservado exatamente.</p><FieldError message={errors[`unit-${index}-slug`]} /></label>
                       <label className={labelClass}>CNPJ da unidade<input value={unit.cnpj} onChange={(event) => changeUnit(index, { cnpj: formatCnpj(event.target.value) })} className={fieldClass} inputMode="numeric" placeholder="00.000.000/0000-00" /><FieldError message={errors[`unit-${index}-cnpj`]} /></label>
-                      <label className={labelClass}>ID da unidade no Alpha7<input value={unit.sourceUnitId} onChange={(event) => changeUnit(index, { sourceUnitId: Number(event.target.value) })} className={fieldClass} type="number" min={1} step={1} /><FieldError message={errors[`unit-${index}-source`]} /></label>
-                      <label className={`${labelClass} sm:col-span-2`}>Conexão PostgreSQL <span className="font-normal text-rose-600">(validação obrigatória)</span><div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[index] ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="postgresql://usuario:senha@host:5432/database" aria-invalid={Boolean(errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`])} /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [index]: !current[index] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[index] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[index] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection(index)} disabled={connectionCheck.state === 'validating'} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">O teste é executado pelo servidor autorizado a acessar os bancos. Codifique caracteres especiais, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`]} /></label>
+                      <label className={`${labelClass} sm:col-span-2`}>ERP integrado<select value={unit.erpId ?? ''} onChange={(event) => changeErp(index, Number(event.target.value) as CatalogErpId)} className={fieldClass} required aria-invalid={Boolean(errors[`unit-${index}-erp`])}><option value="" disabled>Selecione o ERP</option>{CATALOG_ERPS.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><p className="mt-1.5 text-xs text-slate-500">Escolha o ERP para informar os dados da integração. Ele não poderá ser alterado depois da criação do rascunho.</p><FieldError message={errors[`unit-${index}-erp`]} /></label>
+                      {erp?.sourceUnitLabel ? <label className={labelClass}>{erp.sourceUnitLabel}<input value={unit.sourceUnitId ?? ''} onChange={(event) => changeUnit(index, { sourceUnitId: event.target.value === '' ? null : Number(event.target.value) })} className={fieldClass} type="number" min={1} step={1} aria-invalid={Boolean(errors[`unit-${index}-source`])} /><FieldError message={errors[`unit-${index}-source`]} /></label> : null}
+                      {erp?.databaseDriver ? <label className={`${labelClass} sm:col-span-2`}>Conexão {erp.databaseName} <span className="font-normal text-rose-600">(validação obrigatória)</span>
+                        <div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={unit.credentialRef} onChange={(event) => changeUnit(index, { credentialRef: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[unit.localId] ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} placeholder={erp.databaseDriver === 'mysql' ? 'mysql://usuario:senha@host:3306/database' : 'postgresql://usuario:senha@host:5432/database'} aria-invalid={Boolean(errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`])} /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [unit.localId]: !current[unit.localId] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[unit.localId] ? 'Ocultar conexão' : 'Mostrar conexão'}>{showCredentials[unit.localId] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection(index)} disabled={connectionCheck.state === 'validating' || !unit.credentialRef.trim() || !isValidCnpj(unit.cnpj) || !Number.isSafeInteger(unit.sourceUnitId) || Number(unit.sourceUnitId) <= 0} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div>
+                        <p className="mt-1.5 text-xs leading-5 text-slate-500">Informe o CNPJ e o ID da unidade antes de validar. {erp.id === 3 ? 'O teste confirma que o ID da loja no MySQL corresponde ao CNPJ informado. ' : ''}Codifique caracteres especiais da senha, como <code className="rounded bg-slate-200 px-1">@ → %40</code>.</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors[`unit-${index}-credential`] || errors[`unit-${index}-connection`]} />
+                      </label> : null}
+                      {erp?.id === 4 ? <label className={`${labelClass} sm:col-span-2`}>API key do Vetor<div className="relative"><input value={unit.vetorApiKey} onChange={(event) => changeUnit(index, { vetorApiKey: event.target.value })} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredentials[unit.localId] ? 'text' : 'password'} autoComplete="new-password" autoCapitalize="none" spellCheck={false} maxLength={2048} placeholder="Informe a API key do Vetor" aria-invalid={Boolean(errors[`unit-${index}-apiKey`])} /><button type="button" onClick={() => setShowCredentials((current) => ({ ...current, [unit.localId]: !current[unit.localId] }))} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label={showCredentials[unit.localId] ? 'Ocultar API key' : 'Mostrar API key'}>{showCredentials[unit.localId] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">Informe a chave de acesso e o código da filial. A API key será protegida e não será exibida após salvar.</p><FieldError message={errors[`unit-${index}-apiKey`]} /></label> : null}
+                      {erp?.id === 2 ? <div className="flex gap-3 rounded-lg border border-violet-200 bg-violet-50 p-4 text-sm leading-6 text-violet-900 sm:col-span-2"><Info className="mt-0.5 size-4 shrink-0" /><p>A origem Linx será localizada automaticamente pelo CNPJ <strong>{unit.cnpj || 'da unidade'}</strong>. Não é necessário ID, API key ou conexão com banco.</p></div> : null}
                       {!hubOnly ? <label className={`${labelClass} sm:col-span-2`}>Webhook de pedidos<input value={unit.orderWebhookUrl} onChange={(event) => changeUnit(index, { orderWebhookUrl: event.target.value })} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="url" spellCheck={false} placeholder="https://api.exemplo.com/webhooks/pedidos" aria-invalid={Boolean(errors[`unit-${index}-webhook`])} /><p className="mt-1.5 text-xs leading-5 text-slate-500">URL HTTPS que receberá os pedidos feitos para esta unidade.</p><FieldError message={errors[`unit-${index}-webhook`]} /></label> : null}
-                      <label className={labelClass}>Itens por página<input value={unit.pageSize} onChange={(event) => changeUnit(index, { pageSize: Number(event.target.value) })} className={fieldClass} type="number" min={1} max={500} /><FieldError message={errors[`unit-${index}-pageSize`]} /></label>
-                      <label className={labelClass}>Limite de queda de EAN (bps)<input value={unit.validEanDropThresholdBps} onChange={(event) => changeUnit(index, { validEanDropThresholdBps: Number(event.target.value) })} className={fieldClass} type="number" min={0} max={10000} /><FieldError message={errors[`unit-${index}-threshold`]} /></label>
+                      {erp ? <><label className={labelClass}>Itens por página<input value={unit.pageSize} onChange={(event) => changeUnit(index, { pageSize: Number(event.target.value) })} className={fieldClass} type="number" min={1} max={500} disabled={unit.erpId === 2} /><FieldError message={errors[`unit-${index}-pageSize`]} /></label>
+                      <label className={labelClass}>Limite de queda de EAN (bps)<input value={unit.validEanDropThresholdBps} onChange={(event) => changeUnit(index, { validEanDropThresholdBps: Number(event.target.value) })} className={fieldClass} type="number" min={0} max={10000} disabled={unit.erpId === 2} /><FieldError message={errors[`unit-${index}-threshold`]} /></label></> : null}
                       <div className="flex items-center justify-between gap-4 sm:col-span-2"><label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="radio" name="initial-unit" checked={unit.initial === true} onChange={() => chooseInitial(index)} className="size-4 accent-[#145efc]" />Unidade inicial do grupo</label>{units.length > 1 ? <button type="button" onClick={() => removeUnit(index)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700"><Trash2 className="size-3.5" />Remover</button> : null}</div>
                     </div> : null}
                   </article>;
@@ -292,12 +359,12 @@ export default function NewCatalogDeploymentPage() {
 
             {step === 3 && deployment && !hubOnly ? <div className="rounded-xl border border-[#dbe3ef] bg-white">
               <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Etapa 3 de 3</p><h2 className="mt-1.5 text-xl font-semibold tracking-[-0.025em] text-slate-950">Identidade visual</h2><p className="mt-1 text-sm leading-6 text-slate-500">Envie os oito assets obrigatórios para desktop e mobile. O upload é feito diretamente para o storage seguro.</p></div>
-              <div className="m-5 flex gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800 sm:m-6"><Info className="mt-0.5 size-4 shrink-0" /><p>O rascunho foi criado. Os dados não podem ser editados nesta etapa; para alterá-los, cancele e crie uma nova implantação.</p></div>
+              <div className="m-5 flex gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800 sm:m-6"><Info className="mt-0.5 size-4 shrink-0" /><p>O rascunho foi criado. Você pode sair e retomar o envio pelo botão “Enviar imagens” no acompanhamento. Para revisar a unidade, use <Link to={`/main/catalogo/${deployment.id}/corrigir`} className="font-semibold underline">Corrigir dados</Link>.</p></div>
               <div className="grid gap-4 px-5 pb-6 sm:grid-cols-2 sm:px-6 lg:grid-cols-3">{assetDefinitions.map(({ type, label, hint }) => {
                 const upload = uploads[type];
                 const confirmed = deployment.assets.find((asset) => asset.type === type)?.status === 'confirmed';
                 return <label key={type} className={`group relative flex min-h-44 cursor-pointer flex-col overflow-hidden rounded-xl border-2 border-dashed p-4 transition ${confirmed ? 'border-emerald-300 bg-emerald-50/40' : upload.state === 'error' ? 'border-rose-300 bg-rose-50/40' : 'border-slate-300 bg-slate-50 hover:border-primary hover:bg-blue-50/40'}`}>
-                  <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" disabled={upload.state === 'uploading'} onChange={(event) => void handleAsset(type, event.target.files?.[0])} />
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" disabled={upload.state === 'uploading'} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void handleAsset(type, file); }} />
                   {upload.preview ? <img src={upload.preview} alt="" className="absolute inset-0 size-full object-cover opacity-[0.12]" /> : null}
                   <span className={`relative flex size-10 items-center justify-center rounded-lg ${confirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-500 shadow-sm'}`}>{upload.state === 'uploading' ? <Loader2 className="size-5 animate-spin" /> : confirmed ? <CheckCircle2 className="size-5" /> : <ImagePlus className="size-5" />}</span>
                   <span className="relative mt-auto pt-6"><span className="block text-sm font-semibold text-slate-900">{label}</span><span className="mt-1 block text-xs text-slate-500">{confirmed ? upload.fileName || 'Arquivo confirmado' : upload.state === 'uploading' ? 'Enviando e confirmando…' : hint}</span>{upload.message ? <span className="mt-1 block text-xs font-medium text-rose-600">{upload.message}</span> : null}</span>
@@ -311,8 +378,8 @@ export default function NewCatalogDeploymentPage() {
 
           <aside className="h-fit rounded-xl border border-[#dbe3ef] bg-white p-5 lg:sticky lg:top-6">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Resumo</p><h2 className="mt-2 text-lg font-semibold tracking-[-0.025em] text-slate-950">{groupSummary}</h2><p className="mt-1 text-sm text-slate-500">{group.cnpj ? formatCnpj(group.cnpj) : 'CNPJ ainda não informado'}</p>
-            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Catálogo</dt><dd className="font-medium text-slate-800">Hub Único</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Fluxo</dt><dd className="font-medium text-slate-800">{hubOnly ? 'Somente catálogo' : 'Completo'}</dd></div></dl>
-            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500">{hubOnly ? <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>A carga é executada e validada no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>O run é consultado a cada minuto.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>Os itens ausentes seguem para o Banco Único.</li></> : <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>A ativação acontece após sua revisão.</li></>}</ol></div>
+            <dl className="mt-5 divide-y divide-slate-200 border-y border-slate-200 text-sm"><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Usuário</dt><dd className="truncate font-medium text-slate-800">{group.username ? `@${group.username}` : '—'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Unidades</dt><dd className="font-medium text-slate-800">{units.length}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">ERPs</dt><dd className="text-right font-medium text-slate-800">{[...new Set(units.filter((unit) => unit.erpId !== null).map((unit) => catalogErpName(unit.erpId)))].join(', ') || 'Selecione o ERP'}</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Catálogo</dt><dd className="font-medium text-slate-800">Hub Único</dd></div><div className="flex justify-between gap-4 py-3"><dt className="text-slate-500">Fluxo</dt><dd className="font-medium text-slate-800">{hubOnly ? 'Somente catálogo' : 'Completo'}</dd></div></dl>
+            <div className="mt-5 rounded-lg bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-700">Como funciona</p><ol className="mt-3 space-y-2.5 text-xs leading-5 text-slate-500">{hubOnly ? <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>A carga é executada e validada no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>O run é consultado a cada minuto.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>Os itens ausentes seguem para o Banco Único.</li></> : <><li className="flex gap-2"><span className="font-semibold text-primary">1.</span>O catálogo é validado no Hub.</li><li className="flex gap-2"><span className="font-semibold text-primary">2.</span>Os tenants são preparados sem publicação.</li><li className="flex gap-2"><span className="font-semibold text-primary">3.</span>Acompanhe a ativação e a publicação da loja.</li></>}</ol></div>
           </aside>
         </div>
       </main>

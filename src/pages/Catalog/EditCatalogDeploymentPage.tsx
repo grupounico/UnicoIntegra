@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Database, Eye, EyeOff, Info, Loader2, LockKeyhole, Save, ShieldCheck, Store } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { getDeployment, updateDeploymentUnit, type Deployment, type DeploymentUnit, type UpdateDeploymentUnitPayload } from '../../services/catalogDeployment.service';
-import { databaseConnectionErrorMessage, testDatabaseConnectionUrl } from '../../services/database.service';
+import { catalogErp, catalogErpName, getDeployment, updateDeploymentUnit, type Deployment, type DeploymentUnit, type UpdateDeploymentUnitPayload } from '../../services/catalogDeployment.service';
+import { databaseConnectionPayloadFromUrl } from '../../services/database.service';
 import { getAuthSession } from '../../utils/authSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, fieldClass, formatCnpj, labelClass, primaryButtonClass, secondaryButtonClass, StatusBadge } from './catalogUi';
+import { hasValidCatalogConnection, useCatalogConnectionChecks } from './useCatalogConnectionChecks';
 
 type UnitForm = {
   codigo: string;
@@ -12,14 +13,13 @@ type UnitForm = {
   cnpj: string;
   sourceUnitId: string;
   credentialRef: string;
+  vetorApiKey: string;
   orderWebhookUrl: string;
   pageSize: string;
   validEanDropThresholdBps: string;
 };
 
 type FormErrors = Partial<Record<keyof UnitForm, string>>;
-type ConnectionCheck = { state: 'idle' | 'validating' | 'valid' | 'error'; credentialRef?: string; message?: string };
-
 const editableStatuses = new Set(['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required']);
 
 function formFromUnit(unit: DeploymentUnit): UnitForm {
@@ -27,8 +27,9 @@ function formFromUnit(unit: DeploymentUnit): UnitForm {
     codigo: unit.code,
     nome: unit.name,
     cnpj: formatCnpj(unit.cnpj),
-    sourceUnitId: String(unit.sourceUnitId),
+    sourceUnitId: unit.sourceUnitId == null ? '' : String(unit.sourceUnitId),
     credentialRef: '',
+    vetorApiKey: '',
     orderWebhookUrl: '',
     pageSize: String(unit.pageSize),
     validEanDropThresholdBps: String(unit.validEanDropThresholdBps),
@@ -54,17 +55,21 @@ function isValidCnpj(value: string) {
 
 function validate(form: UnitForm, unit: DeploymentUnit, identityLocked: boolean, sourceLocked: boolean) {
   const errors: FormErrors = {};
+  const erp = catalogErp(unit.erpId, unit.provider);
   if (!identityLocked) {
     if (form.codigo.trim() !== unit.code && !form.codigo.trim()) errors.codigo = 'Informe o código da unidade.';
     if (form.nome.trim() !== unit.name && !form.nome.trim()) errors.nome = 'Informe o nome da unidade.';
     if (form.cnpj.replace(/\D/g, '') !== unit.cnpj && !isValidCnpj(form.cnpj)) errors.cnpj = 'Informe um CNPJ válido.';
   }
-  if (!sourceLocked && Number(form.sourceUnitId) !== unit.sourceUnitId && (!Number.isInteger(Number(form.sourceUnitId)) || Number(form.sourceUnitId) <= 0)) errors.sourceUnitId = 'Use um número inteiro positivo.';
-  if (form.credentialRef.trim()) {
+  if (erp?.sourceUnitLabel && !sourceLocked && (!Number.isSafeInteger(Number(form.sourceUnitId)) || Number(form.sourceUnitId) <= 0)) errors.sourceUnitId = 'Use um número inteiro positivo.';
+  if (erp?.databaseDriver && form.credentialRef.trim()) {
     try {
-      const url = new URL(form.credentialRef.trim());
-      if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.username || !url.pathname.slice(1)) throw new Error();
-    } catch { errors.credentialRef = 'Use uma URL PostgreSQL completa e válida.'; }
+      databaseConnectionPayloadFromUrl(form.credentialRef, form.cnpj, { driver: erp.databaseDriver, sourceUnitId: Number(form.sourceUnitId) });
+    } catch { errors.credentialRef = `Use uma URL ${erp.databaseName} completa e válida, incluindo usuário e senha.`; }
+  }
+  if (erp?.databaseDriver && !form.credentialRef.trim() && !unit.hasCredential) errors.credentialRef = 'Informe e valide a conexão com o banco.';
+  if (erp?.id === 4 && ((!unit.hasCredential && !form.vetorApiKey.trim()) || (form.vetorApiKey.trim() && (form.vetorApiKey.trim().length < 8 || form.vetorApiKey.trim().length > 2048 || /[\r\n]/.test(form.vetorApiKey))))) {
+    errors.vetorApiKey = 'Informe uma API key do Vetor entre 8 e 2048 caracteres, sem quebras de linha.';
   }
   if (form.orderWebhookUrl.trim()) {
     try {
@@ -98,7 +103,7 @@ export default function EditCatalogDeploymentPage() {
   const [submitError, setSubmitError] = useState('');
   const [saved, setSaved] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
-  const [connectionCheck, setConnectionCheck] = useState<ConnectionCheck>({ state: 'idle' });
+  const { checks: connectionChecks, invalidate: invalidateConnection, validateConnection: checkConnection } = useCatalogConnectionChecks();
 
   const load = useCallback(async () => {
     if (!deploymentId) return;
@@ -111,21 +116,25 @@ export default function EditCatalogDeploymentPage() {
         || result.units[0];
       setSelectedId(preferred?.id || '');
       setForm(preferred ? formFromUnit(preferred) : null);
-      setConnectionCheck({ state: 'idle' });
+      result.units.forEach((item) => invalidateConnection(item.id));
       setLoadError('');
     } catch (caught) {
       setLoadError(caught instanceof Error ? caught.message : 'Não foi possível carregar a implantação.');
     } finally { setLoading(false); }
-  }, [deploymentId, searchParams]);
+  }, [deploymentId, searchParams, invalidateConnection]);
 
   useEffect(() => { void load(); }, [load]);
 
   const unit = useMemo(() => deployment?.units.find((item) => item.id === selectedId) || null, [deployment, selectedId]);
+  const erp = unit ? catalogErp(unit.erpId, unit.provider) : undefined;
+  const connectionCheck = connectionChecks[selectedId] || { state: 'idle' as const };
   const identityLocked = Boolean(unit?.hubSellerUnitId);
   const sourceLocked = Boolean(unit?.hubIntegrationId);
   const canEdit = Boolean(deployment && editableStatuses.has(deployment.status));
 
   function chooseUnit(next: DeploymentUnit) {
+    invalidateConnection(selectedId);
+    invalidateConnection(next.id);
     setSelectedId(next.id);
     setSearchParams({ unit: next.id }, { replace: true });
     setForm(formFromUnit(next));
@@ -133,41 +142,30 @@ export default function EditCatalogDeploymentPage() {
     setSubmitError('');
     setSaved(false);
     setShowCredential(false);
-    setConnectionCheck({ state: 'idle' });
   }
 
   function change<K extends keyof UnitForm>(field: K, value: UnitForm[K]) {
     setForm((current) => current ? { ...current, [field]: value } : current);
     setErrors((current) => ({ ...current, [field]: undefined }));
-    if (field === 'credentialRef') setConnectionCheck({ state: 'idle' });
+    if (field === 'credentialRef' || field === 'cnpj' || field === 'sourceUnitId') invalidateConnection(selectedId);
     setSaved(false);
   }
 
   async function validateConnection() {
-    if (!form) return;
-    const credentialRef = form.credentialRef.trim();
-    setConnectionCheck({ state: 'validating', credentialRef });
+    if (!form || !unit || !erp?.databaseDriver) return;
     setErrors((current) => ({ ...current, credentialRef: undefined }));
-    try {
-      const result = await testDatabaseConnectionUrl(credentialRef, form.cnpj);
-      setConnectionCheck((current) => current.state === 'validating' && current.credentialRef === credentialRef
-        ? { state: 'valid', credentialRef, message: `${result.message} (${result.latencyMs} ms)` }
-        : current);
-    } catch (caught) {
-      setConnectionCheck((current) => current.state === 'validating' && current.credentialRef === credentialRef
-        ? { state: 'error', credentialRef, message: databaseConnectionErrorMessage(caught) }
-        : current);
-    }
+    await checkConnection(unit.id, { driver: erp.databaseDriver, credentialRef: form.credentialRef, cnpj: form.cnpj, sourceUnitId: Number(form.sourceUnitId) });
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!deployment || !unit || !form || !canEdit) return;
     const nextErrors = validate(form, unit, identityLocked, sourceLocked);
-    if (form.credentialRef.trim()
-      && (connectionCheck.state !== 'valid' || connectionCheck.credentialRef !== form.credentialRef.trim())) {
+    if (erp?.databaseDriver && form.credentialRef.trim()
+      && !hasValidCatalogConnection(connectionCheck, { driver: erp.databaseDriver, credentialRef: form.credentialRef, cnpj: form.cnpj, sourceUnitId: Number(form.sourceUnitId) })) {
       nextErrors.credentialRef = 'Valide a nova conexão com o banco antes de salvar.';
     }
+    if (erp?.id === 1 && deployment.units.some((item) => item.id !== unit.id && item.erpId === 1 && item.sourceUnitId === Number(form.sourceUnitId))) nextErrors.sourceUnitId = 'Este ID já está em uso por outra unidade Alpha7.';
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
     const payload: UpdateDeploymentUnitPayload = {
@@ -175,8 +173,9 @@ export default function EditCatalogDeploymentPage() {
       ...(!identityLocked && form.codigo.trim() !== unit.code ? { codigo: form.codigo.trim() } : {}),
       ...(!identityLocked && form.nome.trim() !== unit.name ? { nome: form.nome.trim() } : {}),
       ...(!identityLocked && form.cnpj.replace(/\D/g, '') !== unit.cnpj ? { cnpj: form.cnpj.replace(/\D/g, '') } : {}),
-      ...(!sourceLocked && Number(form.sourceUnitId) !== unit.sourceUnitId ? { sourceUnitId: Number(form.sourceUnitId) } : {}),
-      ...(form.credentialRef.trim() ? { credentialRef: form.credentialRef.trim() } : {}),
+      ...(erp?.sourceUnitLabel && !sourceLocked && Number(form.sourceUnitId) !== unit.sourceUnitId ? { sourceUnitId: Number(form.sourceUnitId) } : {}),
+      ...(erp?.databaseDriver && form.credentialRef.trim() ? { credentialRef: form.credentialRef.trim() } : {}),
+      ...(erp?.id === 4 && form.vetorApiKey.trim() ? { vetorApiKey: form.vetorApiKey.trim() } : {}),
       ...(deployment.flowMode === 'full' && form.orderWebhookUrl.trim() ? { orderWebhookUrl: form.orderWebhookUrl.trim() } : {}),
       pageSize: Number(form.pageSize),
       validEanDropThresholdBps: Number(form.validEanDropThresholdBps),
@@ -188,7 +187,7 @@ export default function EditCatalogDeploymentPage() {
       const updatedUnit = updated.units.find((item) => item.id === unit.id);
       setDeployment(updated);
       setForm(updatedUnit ? formFromUnit(updatedUnit) : form);
-      setConnectionCheck({ state: 'idle' });
+      invalidateConnection(unit.id);
       setSaved(true);
     } catch (caught) {
       setSubmitError(caught instanceof Error ? caught.message : 'Não foi possível salvar as correções.');
@@ -204,7 +203,7 @@ export default function EditCatalogDeploymentPage() {
       <div className="mx-auto grid w-full max-w-[1180px] gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[280px_minmax(0,1fr)] lg:px-10 lg:py-8">
         <aside className="h-fit rounded-xl border border-[#dbe3ef] bg-white lg:sticky lg:top-6">
           <div className="border-b border-[#dbe3ef] px-5 py-4"><h2 className="text-sm font-semibold text-slate-950">Escolha a unidade</h2><p className="mt-1 text-xs leading-5 text-slate-500">As alterações são salvas separadamente por filial.</p></div>
-          <div className="p-2">{deployment.units.map((item) => <button key={item.id} type="button" onClick={() => chooseUnit(item)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition ${selectedId === item.id ? 'bg-blue-50 text-primary' : 'text-slate-700 hover:bg-slate-50'}`}><span className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${selectedId === item.id ? 'bg-white text-primary' : 'bg-slate-100 text-slate-500'}`}><Store className="size-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{item.name}</span><span className="mt-0.5 block truncate text-xs opacity-70">{item.code} · Alpha7 {item.sourceUnitId}</span></span></button>)}</div>
+          <div className="p-2">{deployment.units.map((item) => <button key={item.id} type="button" onClick={() => chooseUnit(item)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition ${selectedId === item.id ? 'bg-blue-50 text-primary' : 'text-slate-700 hover:bg-slate-50'}`}><span className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${selectedId === item.id ? 'bg-white text-primary' : 'bg-slate-100 text-slate-500'}`}><Store className="size-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{item.name}</span><span className="mt-0.5 block truncate text-xs opacity-70">{item.code} · {catalogErpName(item.erpId, item.provider)}{item.sourceUnitId ? ` ${item.sourceUnitId}` : ''}</span></span></button>)}</div>
         </aside>
 
         {unit && form ? <form onSubmit={submit} className="min-w-0 space-y-5">
@@ -218,7 +217,9 @@ export default function EditCatalogDeploymentPage() {
               <label className={labelClass}>Código da unidade<input value={form.codigo} onChange={(event) => change('codigo', event.target.value.toUpperCase())} className={fieldClass} maxLength={100} disabled={!canEdit || identityLocked} aria-invalid={Boolean(errors.codigo)} /><FieldError message={errors.codigo} /></label>
               <label className={labelClass}>Nome da unidade<input value={form.nome} onChange={(event) => change('nome', event.target.value)} className={fieldClass} maxLength={255} disabled={!canEdit || identityLocked} aria-invalid={Boolean(errors.nome)} /><FieldError message={errors.nome} /></label>
               <label className={labelClass}>CNPJ da unidade<input value={form.cnpj} onChange={(event) => change('cnpj', formatCnpj(event.target.value))} className={fieldClass} inputMode="numeric" disabled={!canEdit || identityLocked} aria-invalid={Boolean(errors.cnpj)} /><FieldError message={errors.cnpj} /></label>
-              <label className={labelClass}>ID da unidade no Alpha7<input value={form.sourceUnitId} onChange={(event) => change('sourceUnitId', event.target.value)} className={fieldClass} type="number" min={1} step={1} disabled={!canEdit || sourceLocked} aria-invalid={Boolean(errors.sourceUnitId)} /><FieldError message={errors.sourceUnitId} /></label>
+              <label className={labelClass}>ERP integrado<input value={`${unit.erpId} — ${catalogErpName(unit.erpId, unit.provider)}`} className={`${fieldClass} bg-slate-100`} disabled /><p className="mt-1.5 text-xs text-slate-500">O ERP é imutável após a criação do rascunho.</p></label>
+              {erp?.sourceUnitLabel ? <label className={labelClass}>{erp.sourceUnitLabel}<input value={form.sourceUnitId} onChange={(event) => change('sourceUnitId', event.target.value)} className={fieldClass} type="number" min={1} step={1} disabled={!canEdit || sourceLocked} aria-invalid={Boolean(errors.sourceUnitId)} /><FieldError message={errors.sourceUnitId} /></label> : null}
+              {erp?.id === 2 ? <div className="flex gap-3 rounded-lg border border-violet-200 bg-violet-50 p-4 text-xs leading-5 text-violet-900"><Info className="mt-0.5 size-4 shrink-0" /><p>A origem Linx é localizada pelo CNPJ da unidade, sem ID de origem ou credencial.</p></div> : null}
               {(identityLocked || sourceLocked) ? <div className="flex gap-3 rounded-lg bg-slate-100 p-4 text-xs leading-5 text-slate-600 sm:col-span-2"><LockKeyhole className="mt-0.5 size-4 shrink-0 text-slate-500" /><p>Os identificadores bloqueados já foram usados para criar recursos no Hub. Mantê-los fixos evita que esta implantação passe a apontar para outra filial.</p></div> : null}
             </div>
           </section>
@@ -226,11 +227,16 @@ export default function EditCatalogDeploymentPage() {
           <section className="rounded-xl border border-[#dbe3ef] bg-white">
             <div className="border-b border-[#dbe3ef] px-5 py-5 sm:px-6"><div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-primary"><Database className="size-5" /></span><div><h2 className="text-base font-semibold text-slate-950">Conexão e carga</h2><p className="mt-1 text-sm leading-6 text-slate-500">Esses dados podem ser corrigidos mesmo quando a integração já existe.</p></div></div></div>
             <div className="grid gap-5 px-5 py-6 sm:grid-cols-2 sm:px-6">
-              <label className={`${labelClass} sm:col-span-2`}>Nova conexão PostgreSQL <span className="font-normal text-slate-400">(opcional; validação obrigatória quando preenchida)</span><div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={form.credentialRef} onChange={(event) => change('credentialRef', event.target.value)} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredential ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} disabled={!canEdit} placeholder={unit.hasCredential ? 'Deixe em branco para manter a conexão atual' : 'postgresql://usuario:senha@host:5432/database'} aria-invalid={Boolean(errors.credentialRef)} /><button type="button" onClick={() => setShowCredential((current) => !current)} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary" aria-label={showCredential ? 'Ocultar conexão' : 'Mostrar conexão'} disabled={!canEdit}>{showCredential ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection()} disabled={!canEdit || connectionCheck.state === 'validating' || !form.credentialRef.trim()} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasCredential ? 'Existe uma conexão protegida. Por segurança, ela não é exibida.' : 'Nenhuma conexão foi configurada.'} O teste da nova URL é executado pelo servidor autorizado a acessar os bancos.</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors.credentialRef} /></label>
+              {erp?.databaseDriver ? <label className={`${labelClass} sm:col-span-2`}>Nova conexão {erp.databaseName} <span className="font-normal text-slate-400">(opcional; validação obrigatória quando preenchida)</span>
+                <div className="flex items-start gap-2"><div className="relative min-w-0 flex-1"><input value={form.credentialRef} onChange={(event) => change('credentialRef', event.target.value)} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredential ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} disabled={!canEdit} placeholder={unit.hasCredential ? 'Deixe em branco para manter a conexão atual' : erp.databaseDriver === 'mysql' ? 'mysql://usuario:senha@host:3306/database' : 'postgresql://usuario:senha@host:5432/database'} aria-invalid={Boolean(errors.credentialRef)} /><button type="button" onClick={() => setShowCredential((current) => !current)} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary" aria-label={showCredential ? 'Ocultar conexão' : 'Mostrar conexão'} disabled={!canEdit}>{showCredential ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><button type="button" onClick={() => void validateConnection()} disabled={!canEdit || connectionCheck.state === 'validating' || !form.credentialRef.trim() || !isValidCnpj(form.cnpj) || !Number.isSafeInteger(Number(form.sourceUnitId)) || Number(form.sourceUnitId) <= 0} className={`mt-2 inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${connectionCheck.state === 'valid' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>{connectionCheck.state === 'validating' ? <Loader2 className="size-4 animate-spin" /> : connectionCheck.state === 'valid' ? <CheckCircle2 className="size-4" /> : null}Validar</button></div>
+                <p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasCredential ? 'Existe uma conexão protegida. Por segurança, ela não é exibida.' : 'Nenhuma conexão foi configurada.'} {erp.id === 3 ? 'O teste confirma que o ID da loja no MySQL corresponde ao CNPJ informado.' : 'O teste da nova URL é executado pelo servidor autorizado a acessar os bancos.'}</p>{connectionCheck.message ? <p className={`mt-1.5 text-xs font-medium ${connectionCheck.state === 'valid' ? 'text-emerald-700' : 'text-rose-600'}`}>{connectionCheck.message}</p> : null}<FieldError message={errors.credentialRef} />
+              </label> : null}
+              {erp?.id === 4 ? <label className={`${labelClass} sm:col-span-2`}>Nova API key do Vetor <span className="font-normal text-slate-400">(opcional)</span><div className="relative"><input value={form.vetorApiKey} onChange={(event) => change('vetorApiKey', event.target.value)} className={`${fieldClass} pr-12 font-mono text-xs`} type={showCredential ? 'text' : 'password'} autoComplete="new-password" autoCapitalize="none" spellCheck={false} maxLength={2048} disabled={!canEdit} placeholder={unit.hasCredential ? 'Deixe em branco para manter a API key atual' : 'Informe a API key do Vetor'} aria-invalid={Boolean(errors.vetorApiKey)} /><button type="button" onClick={() => setShowCredential((current) => !current)} className="absolute right-1.5 top-1/2 mt-1 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary" aria-label={showCredential ? 'Ocultar API key' : 'Mostrar API key'} disabled={!canEdit}>{showCredential ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasCredential ? 'Existe uma API key protegida. Deixe em branco para mantê-la.' : 'Nenhuma API key foi configurada.'} A chave salva não é exibida.</p><FieldError message={errors.vetorApiKey} /></label> : null}
+              {erp?.id === 2 ? <div className="flex gap-3 rounded-lg bg-violet-50 p-4 text-xs leading-5 text-violet-900 sm:col-span-2"><Info className="mt-0.5 size-4 shrink-0" /><p>Linx não utiliza conexão com banco nem API key. O Hub localizará a origem pelo CNPJ <strong>{formatCnpj(unit.cnpj)}</strong>.</p></div> : null}
               {deployment.flowMode === 'full' ? <label className={`${labelClass} sm:col-span-2`}>Novo webhook de pedidos <span className="font-normal text-slate-400">(opcional)</span><input value={form.orderWebhookUrl} onChange={(event) => change('orderWebhookUrl', event.target.value)} className={fieldClass} type="url" inputMode="url" maxLength={2048} autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={!canEdit} placeholder={unit.hasOrderWebhookUrl ? 'Deixe em branco para manter o webhook atual' : 'https://api.exemplo.com/webhooks/pedidos'} aria-invalid={Boolean(errors.orderWebhookUrl)} /><p className="mt-1.5 text-xs leading-5 text-slate-500">{unit.hasOrderWebhookUrl ? 'Existe um webhook protegido. Por segurança, ele não é exibido.' : 'Nenhum webhook foi configurado.'}</p><FieldError message={errors.orderWebhookUrl} /></label> : null}
-              <label className={labelClass}>Itens por página<input value={form.pageSize} onChange={(event) => change('pageSize', event.target.value)} className={fieldClass} type="number" min={1} max={500} disabled={!canEdit} aria-invalid={Boolean(errors.pageSize)} /><FieldError message={errors.pageSize} /></label>
-              <label className={labelClass}>Limite de queda de EAN (bps)<input value={form.validEanDropThresholdBps} onChange={(event) => change('validEanDropThresholdBps', event.target.value)} className={fieldClass} type="number" min={0} max={10000} disabled={!canEdit} aria-invalid={Boolean(errors.validEanDropThresholdBps)} /><FieldError message={errors.validEanDropThresholdBps} /></label>
-              <div className="flex gap-3 rounded-lg bg-blue-50 p-4 text-xs leading-5 text-blue-800 sm:col-span-2"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" /><p>{deployment.flowMode === 'full' ? 'Conexão e webhook são enviados de forma protegida e nunca aparecem na resposta da API, na linha do tempo ou nos logs da implantação.' : 'A conexão é enviada de forma protegida e usada somente para a carga no Hub.'}</p></div>
+              <label className={labelClass}>Itens por página<input value={form.pageSize} onChange={(event) => change('pageSize', event.target.value)} className={fieldClass} type="number" min={1} max={500} disabled={!canEdit || unit.erpId === 2} aria-invalid={Boolean(errors.pageSize)} /><FieldError message={errors.pageSize} /></label>
+              <label className={labelClass}>Limite de queda de EAN (bps)<input value={form.validEanDropThresholdBps} onChange={(event) => change('validEanDropThresholdBps', event.target.value)} className={fieldClass} type="number" min={0} max={10000} disabled={!canEdit || unit.erpId === 2} aria-invalid={Boolean(errors.validEanDropThresholdBps)} /><FieldError message={errors.validEanDropThresholdBps} /></label>
+              <div className="flex gap-3 rounded-lg bg-blue-50 p-4 text-xs leading-5 text-blue-800 sm:col-span-2"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" /><p>{erp?.id === 2 ? 'A integração Linx localiza a unidade pelo CNPJ, sem credencial de origem.' : 'As credenciais são protegidas e nunca aparecem nas respostas da API ou na linha do tempo. Deixe os campos de acesso em branco para manter os valores atuais.'}</p></div>
             </div>
           </section>
 

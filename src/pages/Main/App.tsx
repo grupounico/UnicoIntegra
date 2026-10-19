@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import './App.scss';
 import Header from '../../components/Header/Header';
 import { GlobalStatusPopup } from '../../components/GlobalStatusPopup';
@@ -29,7 +29,13 @@ import CatalogActivationReviewPage from '../Catalog/CatalogActivationReviewPage'
 import EditCatalogDeploymentPage from '../Catalog/EditCatalogDeploymentPage';
 import CatalogAtenderBemPage from '../Catalog/CatalogAtenderBemPage';
 import CatalogAtenderBemAssistantPage from '../Catalog/CatalogAtenderBemAssistantPage';
+import CatalogAiPage from '../Catalog/CatalogAiPage';
 import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
+
+function CatalogImagesRoute() {
+  const { deploymentId } = useParams();
+  return <NewCatalogDeploymentPage key={deploymentId} />;
+}
 
 export default function App() {
   const session = getAuthSession();
@@ -75,10 +81,12 @@ export default function App() {
             <Route path="clientes/:id" element={<ClienteDetalhes />} />
             <Route path="clientes" element={<Clientes />} />
             <Route path="catalogo" element={<CatalogDeploymentsPage />} />
-            <Route path="catalogo/novo" element={<NewCatalogDeploymentPage />} />
+            <Route path="catalogo/novo" element={<NewCatalogDeploymentPage key="new" />} />
+            <Route path="catalogo/:deploymentId/imagens" element={<CatalogImagesRoute />} />
             <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />
             <Route path="catalogo/:deploymentId/atenderbem" element={<CatalogAtenderBemPage />} />
             <Route path="catalogo/:deploymentId/atenderbem/assistente" element={<CatalogAtenderBemAssistantPage />} />
+            <Route path="catalogo/:deploymentId/ia" element={<CatalogAiPage />} />
             <Route path="catalogo/:deploymentId/corrigir" element={<EditCatalogDeploymentPage />} />
             <Route path="catalogo/:deploymentId" element={<CatalogDeploymentDetailsPage />} />
             <Route path="*" element={<Navigate to="home" replace />} />
