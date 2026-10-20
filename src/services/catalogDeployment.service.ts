@@ -283,6 +283,10 @@ export interface CreateDeploymentPayload {
   }>;
 }
 
+export type AddDeploymentUnitPayload = {
+  requestedBy: string;
+} & CreateDeploymentPayload['units'][number];
+
 export interface UpdateDeploymentUnitPayload {
   requestedBy: string;
   codigo?: string;
@@ -526,6 +530,33 @@ export async function createDeployment(payload: CreateDeploymentPayload): Promis
   deployments.unshift(deployment);
   writeMocks(deployments);
   return deployment;
+}
+
+export async function addDeploymentUnit(id: string, payload: AddDeploymentUnitPayload): Promise<Deployment> {
+  if (!CATALOG_DEMO_MODE) return request(`/api/v1/deployments/${id}/units`, { method: 'POST', body: JSON.stringify(payload) }, true);
+  return mockUpdate(id, (deployment) => {
+    if (deployment.units.some((unit) => unit.code.toLowerCase() === payload.codigo.trim().toLowerCase())) {
+      throw new Error('Este código já está em uso por outra unidade do grupo.');
+    }
+    const now = new Date().toISOString();
+    const unit = makeUnit(id, { ...payload, initial: false });
+    const requeue = deployment.status !== 'draft';
+    return {
+      ...deployment,
+      units: [...deployment.units, unit],
+      status: requeue ? 'queued' : 'draft',
+      currentStage: requeue ? 'queued' : deployment.currentStage,
+      startedAt: requeue ? deployment.startedAt || now : deployment.startedAt,
+      finishedAt: requeue ? null : deployment.finishedAt,
+      lastErrorCode: requeue ? null : deployment.lastErrorCode,
+      lastErrorMessage: requeue ? null : deployment.lastErrorMessage,
+      updatedAt: now,
+      events: [...deployment.events, {
+        id: uuid(), deploymentId: id, unitId: unit.id, eventType: 'unit_added',
+        fromStatus: null, toStatus: 'pending', createdBy: payload.requestedBy, createdAt: now,
+      }],
+    };
+  });
 }
 
 export async function updateDeploymentUnit(id: string, unitId: string, payload: UpdateDeploymentUnitPayload): Promise<Deployment> {
