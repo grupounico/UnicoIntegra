@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowRight, Ban, Boxes, Check, Circle, Copy, Eye, EyeOff, ExternalLink, ImagePlus, KeyRound, Loader2, PencilLine, Play, RefreshCw, RotateCcw, Server, Store, TriangleAlert, X } from 'lucide-react';
+import { Activity, ArrowRight, Ban, Boxes, Check, Circle, Copy, Eye, EyeOff, ExternalLink, ImagePlus, KeyRound, Loader2, PencilLine, Play, Plus, RefreshCw, RotateCcw, Server, Store, TriangleAlert, X } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { cancelDeployment, catalogErpName, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, runAtenderBemImport, retryDeployment, retryUnit, retryUnitShadowActivation, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
 import { hasAtenderBemSession } from '../../services/atenderBemSession';
 import { CatalogPageHeader, CatalogScreen, EmptyState, StatusBadge, formatCnpj, formatDate, primaryButtonClass, secondaryButtonClass, statusLabel } from './catalogUi';
+import AddCatalogDeploymentUnitDialog from './AddCatalogDeploymentUnitDialog';
 
 const resumableStatuses: DeploymentStatus[] = ['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'];
 const stepLabels: Record<string, string> = { vercel_register_project_domain: 'Cadastrar domínio em Production', vercel_configure_production_access: 'Configurar acesso público', vercel_validate_main_release: 'Validar release', vercel_assign_storefront_alias: 'Associar domínio à release', storefront_validate_identity: 'Validar loja pública' };
@@ -111,7 +112,7 @@ const eventLabels: Record<string, string> = {
   deployment_validating_hub_catalog: 'Validação do catálogo iniciada', deployment_provisioning_unicommerce: 'Preparação do Unicommerce iniciada',
   deployment_importing_banco_unico: 'Importação no Banco Único iniciada', deployment_awaiting_activation: 'Implantação pronta para revisão',
   tenants_activated: 'Tenants ativados', deployment_failed: 'Implantação interrompida', deployment_cancelled: 'Implantação cancelada',
-  unit_failed: 'Falha em uma unidade', unit_retry_requested: 'Nova tentativa solicitada',
+  unit_failed: 'Falha em uma unidade', unit_retry_requested: 'Nova tentativa solicitada', unit_added: 'Filial adicionada ao grupo',
   unit_configuration_updated: 'Configuração da unidade corrigida',
   hub_run_status_changed: 'Status da carga atualizado', hub_run_delayed: 'Carga demorando mais que o esperado',
   hub_run_poll_retry: 'Nova consulta ao Hub agendada', hub_run_reconciled: 'Carga anterior reconciliada',
@@ -167,8 +168,11 @@ function ErrorResolutionCard({ deployment, onRetry, onReconciliation, busy }: { 
   const errorCode = deployment.lastErrorCode || affectedUnit?.lastErrorCode;
   const errorMessage = deployment.lastErrorMessage || affectedUnit?.lastErrorMessage;
   const errorStage = typeof eventError?.stage === 'string' ? eventError.stage : deployment.currentStage;
-  const action = typeof eventError?.action === 'string' ? eventError.action : deployment.lastErrorCode === 'HUB_EMPTY_CATALOG' ? 'Revise a carga e o vínculo da unidade antes de prosseguir.' : 'Revise a configuração indicada e tente novamente.';
-  return <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 sm:p-6"><div className="flex gap-4"><span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700"><TriangleAlert className="size-5" /></span><div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-600">{errorCode || 'Atenção necessária'}</p><h2 className="mt-1 text-base font-semibold text-rose-950">{errorMessage || 'A implantação precisa de intervenção.'}</h2><p className="mt-2 text-sm leading-6 text-rose-800">{action}</p><dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-rose-800"><div><dt className="inline text-rose-600">Etapa: </dt><dd className="inline font-semibold">{errorStage ? statusLabel(errorStage as DeploymentStatus) : 'Não informada'}</dd></div><div><dt className="inline text-rose-600">Unidade: </dt><dd className="inline font-semibold">{affectedUnit?.name || 'Implantação geral'}</dd></div></dl><p className="mt-3 text-xs leading-5 text-rose-800">A retomada continua após a última etapa confirmada, preservando os recursos e as unidades já concluídos.</p><div className="mt-5 flex flex-wrap gap-3">{resumableStatuses.includes(deployment.status) ? <button type="button" onClick={onRetry} disabled={busy} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar implantação</button> : null}{deployment.status === 'reconciliation_required' || deployment.lastErrorCode === 'RECONCILIATION_REQUIRED' ? <button type="button" onClick={onReconciliation} className={secondaryButtonClass}><ExternalLink className="size-4" />Solicitar reconciliação</button> : null}</div></div></div></section>;
+  const sellerAlreadyExists = errorCode === 'RECONCILIATION_REQUIRED' && errorStage === 'creating_seller';
+  const action = sellerAlreadyExists
+    ? 'O grupo já tem um seller no Hub. Retome a implantação para vinculá-lo e continuar a criação da filial.'
+    : typeof eventError?.action === 'string' ? eventError.action : deployment.lastErrorCode === 'HUB_EMPTY_CATALOG' ? 'Revise a carga e o vínculo da unidade antes de prosseguir.' : 'Revise a configuração indicada e tente novamente.';
+  return <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 sm:p-6"><div className="flex gap-4"><span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700"><TriangleAlert className="size-5" /></span><div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-600">{errorCode || 'Atenção necessária'}</p><h2 className="mt-1 text-base font-semibold text-rose-950">{sellerAlreadyExists ? 'O grupo já existe no Hub; a filial pode ser vinculada a ele.' : errorMessage || 'A implantação precisa de intervenção.'}</h2><p className="mt-2 text-sm leading-6 text-rose-800">{action}</p><dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-rose-800"><div><dt className="inline text-rose-600">Etapa: </dt><dd className="inline font-semibold">{errorStage ? statusLabel(errorStage as DeploymentStatus) : 'Não informada'}</dd></div><div><dt className="inline text-rose-600">Unidade: </dt><dd className="inline font-semibold">{affectedUnit?.name || 'Implantação geral'}</dd></div></dl><p className="mt-3 text-xs leading-5 text-rose-800">A retomada continua após a última etapa confirmada, preservando os recursos e as unidades já concluídos.</p><div className="mt-5 flex flex-wrap gap-3">{resumableStatuses.includes(deployment.status) ? <button type="button" onClick={onRetry} disabled={busy} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar implantação</button> : null}{!sellerAlreadyExists && (deployment.status === 'reconciliation_required' || deployment.lastErrorCode === 'RECONCILIATION_REQUIRED') ? <button type="button" onClick={onReconciliation} className={secondaryButtonClass}><ExternalLink className="size-4" />Solicitar reconciliação</button> : null}</div></div></div></section>;
 }
 
 function SellerTokenDialog({ deploymentId, requestedBy, onClose }: { deploymentId: string; requestedBy: string; onClose: () => void }) {
@@ -220,6 +224,7 @@ export default function CatalogDeploymentDetailsPage() {
   const [refreshingRun, setRefreshingRun] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [showSellerToken, setShowSellerToken] = useState(false);
+  const [showAddUnit, setShowAddUnit] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!deploymentId) return;
@@ -297,6 +302,14 @@ export default function CatalogDeploymentDetailsPage() {
     }
   }
 
+  function handleUnitAdded(updated: Deployment) {
+    setDeployment(updated);
+    setShowAddUnit(false);
+    setActionMessage(updated.status === 'draft'
+      ? 'Filial adicionada ao grupo. Ela será processada quando você iniciar a implantação.'
+      : 'Filial adicionada ao seller existente. A carga do grupo foi enfileirada.');
+  }
+
   if (loading) return <CatalogScreen><CatalogPageHeader title="Carregando implantação" description="Buscando os dados mais recentes…" backTo="/main/catalogo" /><div className="flex flex-1 flex-col items-center justify-center gap-3 text-slate-500"><Loader2 className="size-7 animate-spin text-primary" /><p className="text-sm">Isso pode levar alguns minutos</p></div></CatalogScreen>;
   if (error || !deployment) return <CatalogScreen><CatalogPageHeader title="Implantação indisponível" description="Não foi possível abrir este acompanhamento." backTo="/main/catalogo" /><main className="p-8"><EmptyState title="Não foi possível carregar" description={error || 'Implantação não encontrada.'} action={<button type="button" onClick={() => void load()} className={primaryButtonClass}>Tentar novamente</button>} /></main></CatalogScreen>;
 
@@ -321,10 +334,12 @@ export default function CatalogDeploymentDetailsPage() {
         <div className="max-w-2xl"><h2 id="ai-step-title" className="text-base font-semibold text-slate-950">Criação da IA</h2><p className="mt-2 text-sm leading-6 text-slate-600">Depois do AtenderBem, crie a IA de atendimento com os dados desta implantação: assistente, URAs e automações já configurados na instância.</p></div>
         <Link className={`${primaryButtonClass} shrink-0`} to={`/main/catalogo/${deployment.id}/ia`}>{deployment.units.some(unit => unit.atenderBemConfig?.ai?.status === 'created') ? 'Revisar IA' : 'Criar IA'}<ArrowRight className="size-4" /></Link>
       </section>
+      {['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required', 'awaiting_activation', 'completed'].includes(deployment.status) ? <div className="mt-6 flex justify-end"><button type="button" onClick={() => setShowAddUnit(true)} className={secondaryButtonClass}><Plus className="size-4" />Adicionar unidade</button></div> : null}
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]"><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-base font-semibold text-slate-950">Unidades</h2><p className="mt-0.5 text-xs text-slate-500">Status operacional de cada origem.</p></div><span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600">{deployment.units.length}</span></div><div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">{deployment.units.map((unit) => <UnitStatusCard key={unit.id} deployment={deployment} unit={unit} busyAction={busyAction} onAction={(action, target) => void handleUnitAction(action, target)} />)}</div></div><DeploymentTimeline events={deployment.events} units={deployment.units} /></div>
       <section className="mt-6 grid gap-4 sm:grid-cols-3"><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><Server className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Seller no Hub</p><p className="mt-1 truncate font-mono text-sm font-semibold text-slate-800">{deployment.hubSellerId || 'Ainda não criado'}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Boxes className="size-4" /></span><p className="mt-4 text-xs text-slate-500">{deployment.flowMode === 'hub_banco_only' ? 'Cobertura Banco Único' : 'Imagens confirmadas'}</p><p className="mt-1 text-sm font-semibold text-slate-800">{deployment.flowMode === 'hub_banco_only' ? `${Math.min(...deployment.units.map((unit) => unit.coveragePercent ?? 0)).toFixed(1)}%` : `${deployment.assets.filter((asset) => asset.status === 'confirmed').length} de ${deployment.assets.length}`}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Activity className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Última atualização</p><p className="mt-1 text-sm font-semibold text-slate-800">{formatDate(deployment.updatedAt)}</p></div></section>
     </div></main>
     {showCancel ? <ConfirmDialog title="Cancelar esta implantação?" description="O processamento será interrompido. Recursos externos já criados no Hub, Unicommerce ou Banco Único não serão excluídos." confirmText="Cancelar implantação" cancelText="Manter processamento" tone="danger" loading={busyAction === 'cancel'} onClose={() => setShowCancel(false)} onConfirm={() => void handleDeploymentAction('cancel')} /> : null}
     {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}
+    {showAddUnit ? <AddCatalogDeploymentUnitDialog deployment={deployment} requestedBy={requestedBy} onClose={() => setShowAddUnit(false)} onAdded={handleUnitAdded} /> : null}
   </CatalogScreen>;
 }
