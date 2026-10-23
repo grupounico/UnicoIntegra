@@ -269,7 +269,7 @@ export interface SellerAccessToken {
 
 export interface PaginatedDeployments {
   data: Deployment[];
-  meta: { page: number; pageSize: number; totalItems: number; totalPages: number };
+  meta: { page: number; pageSize: number; totalItems: number; totalPages: number; summary: { inProgress: number; awaitingAction: number; completed: number } };
 }
 
 export interface CreateDeploymentPayload {
@@ -496,7 +496,8 @@ export async function listDeployments(params: { page?: number; pageSize?: number
   }
   const page = params.page ?? 1;
   const pageSize = params.pageSize ?? 20;
-  return { data: data.slice((page - 1) * pageSize, page * pageSize), meta: { page, pageSize, totalItems: data.length, totalPages: Math.max(1, Math.ceil(data.length / pageSize)) } };
+  const summary = { inProgress: data.filter((item) => ['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'waiting_storefront_release', 'waiting_storefront'].includes(item.status)).length, awaitingAction: data.filter((item) => ['awaiting_activation', 'reconciliation_required', 'monitoring_timeout'].includes(item.status)).length, completed: data.filter((item) => item.status === 'completed').length };
+  return { data: data.slice((page - 1) * pageSize, page * pageSize), meta: { page, pageSize, totalItems: data.length, totalPages: Math.max(1, Math.ceil(data.length / pageSize)), summary } };
 }
 
 export async function getDeployment(id: string): Promise<Deployment> {

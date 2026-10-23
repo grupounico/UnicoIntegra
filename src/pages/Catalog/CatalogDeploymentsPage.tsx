@@ -62,7 +62,7 @@ export default function CatalogDeploymentsPage() {
   const [appliedSearch, setAppliedSearch] = useState('');
   const [status, setStatus] = useState<DeploymentStatus | ''>('');
   const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState<PaginatedDeployments['meta']>({ page: 1, pageSize: 20, totalItems: 0, totalPages: 1 });
+  const [pagination, setPagination] = useState<PaginatedDeployments['meta']>({ page: 1, pageSize: 20, totalItems: 0, totalPages: 1, summary: { inProgress: 0, awaitingAction: 0, completed: 0 } });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -88,9 +88,9 @@ export default function CatalogDeploymentsPage() {
       <CatalogPageHeader title="Catálogo de produtos" description="Cadastre, acompanhe e ative novos catálogos Unico." action={<Link to="/main/catalogo/novo" className={`${primaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Novo catálogo</span><span className="sm:hidden">Novo</span></Link>} />
       <main className="scrollbar-minimal mx-auto min-h-0 w-full max-w-[1440px] flex-1 overflow-y-auto px-5 py-6 sm:px-8 lg:px-10 lg:py-8">
         <section className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Em andamento</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">{deployments.filter((item) => ['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'waiting_storefront_release', 'waiting_storefront'].includes(item.status)).length}</p><p className="mt-1 text-xs text-slate-500">Processamento assíncrono</p></div>
-          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Aguardando ação</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-amber-700">{deployments.filter((item) => ['awaiting_activation', 'reconciliation_required', 'monitoring_timeout'].includes(item.status)).length}</p><p className="mt-1 text-xs text-slate-500">Revisão ou ativação manual</p></div>
-          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Concluídos</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-emerald-700">{deployments.filter((item) => item.status === 'completed').length}</p><p className="mt-1 text-xs text-slate-500">Catálogos ativos</p></div>
+          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Em andamento</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-slate-950">{pagination.summary.inProgress}</p><p className="mt-1 text-xs text-slate-500">Processamento assíncrono</p></div>
+          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Aguardando ação</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-amber-700">{pagination.summary.awaitingAction}</p><p className="mt-1 text-xs text-slate-500">Revisão ou ativação manual</p></div>
+          <div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><p className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">Concluídos</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-emerald-700">{pagination.summary.completed}</p><p className="mt-1 text-xs text-slate-500">Catálogos ativos</p></div>
         </section>
 
         <section className="mt-6 overflow-hidden rounded-xl border border-[#dbe3ef] bg-white">
