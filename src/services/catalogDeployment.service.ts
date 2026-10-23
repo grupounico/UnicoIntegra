@@ -269,7 +269,7 @@ export interface SellerAccessToken {
 
 export interface PaginatedDeployments {
   data: Deployment[];
-  meta: { page: number; pageSize: number; totalItems: number; totalPages: number; summary: { inProgress: number; awaitingAction: number; completed: number } };
+  meta: { page: number; pageSize: number; totalItems: number; totalPages: number; summary?: { inProgress: number; awaitingAction: number; completed: number } };
 }
 
 export interface CreateDeploymentPayload {
@@ -481,10 +481,20 @@ function mockUpdate(id: string, updater: (deployment: Deployment) => Deployment)
   return updated;
 }
 
+function deploymentSummary(data: Deployment[]) {
+  return { inProgress: data.filter((item) => ['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'waiting_storefront_release', 'waiting_storefront'].includes(item.status)).length, awaitingAction: data.filter((item) => ['awaiting_activation', 'reconciliation_required', 'monitoring_timeout'].includes(item.status)).length, completed: data.filter((item) => item.status === 'completed').length };
+}
+
 export async function listDeployments(params: { page?: number; pageSize?: number; status?: string; cnpj?: string; search?: string } = {}): Promise<PaginatedDeployments> {
   if (!CATALOG_DEMO_MODE) {
     const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]));
-    return request(`/api/v1/deployments?${query}`);
+    const response = await request<PaginatedDeployments>(`/api/v1/deployments?${query}`);
+    if (response.meta.summary) return response;
+    const summaryQuery = new URLSearchParams(query); summaryQuery.set('pageSize', '100');
+    const fetchSummaryPage = (page: number) => { const pageQuery = new URLSearchParams(summaryQuery); pageQuery.set('page', String(page)); return request<PaginatedDeployments>(`/api/v1/deployments?${pageQuery}`); };
+    const allPages = await fetchSummaryPage(1);
+    const pages = await Promise.all(Array.from({ length: Math.ceil(allPages.meta.totalItems / 100) - 1 }, (_, index) => fetchSummaryPage(index + 2)));
+    return { ...response, meta: { ...response.meta, summary: deploymentSummary([...(allPages.data || []), ...pages.flatMap((item) => item.data || [])]) } };
   }
   let data = readMocks().map(evolveMock);
   writeMocks(data);
@@ -496,7 +506,7 @@ export async function listDeployments(params: { page?: number; pageSize?: number
   }
   const page = params.page ?? 1;
   const pageSize = params.pageSize ?? 20;
-  const summary = { inProgress: data.filter((item) => ['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'waiting_storefront_release', 'waiting_storefront'].includes(item.status)).length, awaitingAction: data.filter((item) => ['awaiting_activation', 'reconciliation_required', 'monitoring_timeout'].includes(item.status)).length, completed: data.filter((item) => item.status === 'completed').length };
+  const summary = deploymentSummary(data);
   return { data: data.slice((page - 1) * pageSize, page * pageSize), meta: { page, pageSize, totalItems: data.length, totalPages: Math.max(1, Math.ceil(data.length / pageSize)), summary } };
 }
 
