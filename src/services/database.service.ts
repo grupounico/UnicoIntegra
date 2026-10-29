@@ -51,6 +51,7 @@ export interface DatabaseConnectionResult {
         database: string;
         user: string;
         ssl: boolean;
+        sslAutoEnabled?: boolean;
     };
     businessUnitLookup: DatabaseBusinessUnitLookup | null;
 }
