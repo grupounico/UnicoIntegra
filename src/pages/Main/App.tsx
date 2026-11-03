@@ -16,6 +16,7 @@ import Home from '../Home/Home';
 import AiPage from '../AiPage/AiPage';
 import AiTemplateManagerPage from '../AiPage/AiTemplateManagerPage';
 import AiVersionsPage from '../AiPage/AiVersionsPage';
+import AiResultsPage from '../AiPage/AiResultsPage';
 import Integrations from '../Integrations/Integrations';
 import LinkAi from '../LinkAi/LinkAi';
 import Logs from '../SystemLogs/Logs';
@@ -73,6 +74,7 @@ export default function App() {
             <Route path="automations" element={<Automations />} />
             <Route path="iaPage" element={<AiPage />} />
             <Route path="iaPage/list" element={<AiVersionsPage />} />
+            <Route path="iaPage/resultados" element={<AiResultsPage />} />
             <Route path="iaPage/templates" element={<AiTemplateManagerPage />} />
             <Route path="extensions" element={<ExtensionManager />} />
             <Route path="databases" element={<Databases />} />

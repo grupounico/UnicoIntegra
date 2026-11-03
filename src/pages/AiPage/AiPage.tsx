@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
   AlertTriangle,
+  Activity,
   Bot,
   Brain,
   CheckCircle,
@@ -187,7 +188,14 @@ export default function AiPage() {
       onSearchTermChange={(event) => setSearchTerm(event.target.value)}
       searchPlaceholder="Buscar modelos de IA..."
       headerActions={
-        <div className="flex flex-wrap gap-2">
+        <div className="flex max-w-sm flex-wrap gap-2">
+          <button
+            onClick={() => navigate('/main/iaPage/resultados')}
+            className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-100"
+          >
+            <Activity className="h-4 w-4" />
+            Resultados em operação
+          </button>
           <button
             onClick={() => navigate('/main/iaPage/templates')}
             className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"
