@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Check, ChevronRight, Plus, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Check, ChevronRight, PlugZap, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { listAllDeployments, type Deployment, type DeploymentStatus } from '../../services/catalogDeployment.service';
 import { FiltersButton, SITUATIONS, activeFilterChips, filtersFromParams, matchesFilters, writeFilters, EMPTY_FILTERS, type ListFilters, type Situation } from './CatalogListControls';
@@ -256,7 +256,7 @@ export default function CatalogDeploymentsPage() {
 
   return (
     <CatalogScreen>
-      <CatalogPageHeader title="Catálogo de produtos" description="Implantações de catálogo por grupo de farmácias." action={<div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => void load()} disabled={loading} className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-default" aria-label="Atualizar lista" title="Atualizar lista"><RefreshCw className={`size-4 ${loading ? 'motion-safe:animate-spin' : ''}`} /></button><Link to="/main/catalogo/novo" className={`${primaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Novo catálogo</span><span className="sm:hidden">Novo</span></Link></div>} />
+      <CatalogPageHeader title="Catálogo de produtos" description="Implantações de catálogo por grupo de farmácias." action={<div className="flex shrink-0 items-center gap-2"><Link to="/main/catalogo/mcp" className={`${primaryButtonClass} hidden bg-slate-900 hover:bg-slate-800 sm:inline-flex`}><PlugZap className="size-4" />Conectar MCP</Link><button type="button" onClick={() => void load()} disabled={loading} className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-default" aria-label="Atualizar lista" title="Atualizar lista"><RefreshCw className={`size-4 ${loading ? 'motion-safe:animate-spin' : ''}`} /></button><Link to="/main/catalogo/novo" className={`${primaryButtonClass} shrink-0`}><Plus className="size-4" /><span className="hidden sm:inline">Novo catálogo</span><span className="sm:hidden">Novo</span></Link></div>} />
       <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto bg-white [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-[1280px] px-5 pb-12 pt-6 sm:px-8">
           <nav aria-label="Visões rápidas" className="flex gap-1 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_theme(colors.slate.200)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
