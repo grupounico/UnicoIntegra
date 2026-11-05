@@ -22,6 +22,14 @@ export function hasValidCatalogConnection(check: CatalogConnectionCheck | undefi
   return check?.state === 'valid' && check.fingerprint === catalogConnectionFingerprint(input);
 }
 
+function hasSslOption(url: string) {
+  return /[?&](sslmode|ssl)=/i.test(url);
+}
+
+function withSsl(url: string, driver: DatabaseDriver) {
+  return `${url}${url.includes('?') ? '&' : '?'}${driver === 'mysql' ? 'ssl=true' : 'sslmode=require'}`;
+}
+
 export function useCatalogConnectionChecks() {
   const [checks, setChecks] = useState<Record<string, CatalogConnectionCheck>>({});
   const requests = useRef(new Map<string, symbol>());
@@ -40,13 +48,14 @@ export function useCatalogConnectionChecks() {
     });
   }, []);
 
-  const validateConnection = useCallback(async (unitId: string, input: CatalogConnectionInput) => {
+  // applyConnection receives the SSL version of the URL when the server turns out to require it,
+  // so the screen saves the connection that was actually validated.
+  const validateConnection = useCallback(async (unitId: string, input: CatalogConnectionInput, applyConnection?: (connection: string) => void) => {
     const requestId = Symbol();
-    const fingerprint = catalogConnectionFingerprint(input);
     requests.current.set(unitId, requestId);
-    setChecks((current) => ({ ...current, [unitId]: { state: 'validating', fingerprint } }));
-    try {
-      const result = await testDatabaseConnectionUrl(input.credentialRef, input.cnpj, {
+    setChecks((current) => ({ ...current, [unitId]: { state: 'validating', fingerprint: catalogConnectionFingerprint(input) } }));
+    const attempt = async (credentialRef: string) => {
+      const result = await testDatabaseConnectionUrl(credentialRef, input.cnpj, {
         driver: input.driver,
         ...(input.sourceUnitId !== null ? { sourceUnitId: input.sourceUnitId } : {}),
       });
@@ -58,11 +67,20 @@ export function useCatalogConnectionChecks() {
           throw new Error('O teste MySQL precisa confirmar que o ID da loja corresponde ao CNPJ informado.');
         }
       }
+      return result;
+    };
+    try {
+      const result = await attempt(input.credentialRef);
+      // The API retries once with SSL when the server demands it; keep that encrypted connection.
+      const upgraded = Boolean(result.details?.sslAutoEnabled) && !hasSslOption(input.credentialRef);
+      const validated = upgraded ? { ...input, credentialRef: withSsl(input.credentialRef, input.driver) } : input;
       if (requests.current.get(unitId) !== requestId) return;
-      setChecks((current) => ({ ...current, [unitId]: { state: 'valid', fingerprint, message: `${result.message} (${result.latencyMs} ms)` } }));
+      if (upgraded) applyConnection?.(validated.credentialRef);
+      const message = `${result.message} (${result.latencyMs} ms)${upgraded ? ' · Conexão segura (SSL) ativada automaticamente: o servidor exige.' : ''}`;
+      setChecks((current) => ({ ...current, [unitId]: { state: 'valid', fingerprint: catalogConnectionFingerprint(validated), message } }));
     } catch (caught) {
       if (requests.current.get(unitId) !== requestId) return;
-      setChecks((current) => ({ ...current, [unitId]: { state: 'error', fingerprint, message: databaseConnectionErrorMessage(caught) } }));
+      setChecks((current) => ({ ...current, [unitId]: { state: 'error', fingerprint: catalogConnectionFingerprint(input), message: databaseConnectionErrorMessage(caught) } }));
     }
   }, []);
 
