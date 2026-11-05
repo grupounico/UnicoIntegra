@@ -10,14 +10,14 @@ const tools = [
 ];
 
 function defaultEndpoint() {
-  return `${API_BASE.replace(/\/+$/, '')}/mcp/catalogo`;
+  return `${API_BASE.replace(/\/+$/, '')}/mcp/integra`;
 }
 
 function isAllowedEndpoint(value: string) {
   try {
     const url = new URL(value);
     return !url.username && !url.password && !url.search && !url.hash
-      && url.pathname.replace(/\/$/, '') === '/mcp/catalogo'
+      && url.pathname.replace(/\/$/, '') === '/mcp/integra'
       && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname)));
   } catch { return false; }
 }
@@ -77,7 +77,7 @@ export default function CatalogMcpPage() {
               <button type="button" onClick={() => void testConnection()} disabled={testing} className={primaryButtonClass}>{testing ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}{testing ? 'Testando conexão…' : 'Testar conexão'}</button>
             </div>
           </div>
-          <aside className="border-l border-slate-200 pl-5 text-sm leading-6 text-slate-600 max-lg:border-l-0 max-lg:border-t max-lg:pt-6 max-lg:pl-0"><div className="flex items-center gap-2 font-semibold text-slate-900"><ShieldCheck className="size-4 text-emerald-700" />Proteções</div><ul className="mt-3 space-y-2"><li>Endpoint exclusivo em <code className="text-xs">/mcp/catalogo</code></li><li>Chave dedicada com no mínimo 32 caracteres</li><li>Operações gravam o operador responsável</li><li>Senhas e credenciais não retornam nas tools</li></ul></aside>
+          <aside className="border-l border-slate-200 pl-5 text-sm leading-6 text-slate-600 max-lg:border-l-0 max-lg:border-t max-lg:pt-6 max-lg:pl-0"><div className="flex items-center gap-2 font-semibold text-slate-900"><ShieldCheck className="size-4 text-emerald-700" />Proteções</div><ul className="mt-3 space-y-2"><li>Endpoint exclusivo em <code className="text-xs">/mcp/integra</code></li><li>Chave dedicada com no mínimo 32 caracteres</li><li>Operações gravam o operador responsável</li><li>Senhas e credenciais não retornam nas tools</li></ul></aside>
         </section>
 
         <section className="grid gap-8 py-7 lg:grid-cols-[minmax(0,1fr)_17rem]" aria-labelledby="client-title">
