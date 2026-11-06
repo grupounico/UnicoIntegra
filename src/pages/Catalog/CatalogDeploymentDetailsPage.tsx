@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowRight, Ban, Boxes, Check, Circle, Copy, Eye, EyeOff, ExternalLink, ImagePlus, KeyRound, Loader2, PencilLine, Play, Plus, RefreshCw, RotateCcw, Server, Store, TriangleAlert, X } from 'lucide-react';
+import { ArrowRight, Ban, Check, CheckCircle2, ChevronDown, Copy, Eye, EyeOff, ExternalLink, ImagePlus, KeyRound, Loader2, PencilLine, Play, Plus, RefreshCw, RotateCcw, Store, TriangleAlert, X } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { cancelDeployment, catalogErpName, getDeployment, refreshDeploymentRuns, revealDeploymentSellerToken, runAtenderBemImport, retryDeployment, retryUnit, retryUnitShadowActivation, runUnit, type Deployment, type DeploymentEvent, type DeploymentStatus, type DeploymentUnit, type SellerAccessToken } from '../../services/catalogDeployment.service';
 import { getAuthSession } from '../../utils/authSession';
 import { hasAtenderBemSession } from '../../services/atenderBemSession';
-import { CatalogPageHeader, CatalogScreen, EmptyState, StatusBadge, formatCnpj, formatDate, primaryButtonClass, secondaryButtonClass, statusLabel } from './catalogUi';
+import { CatalogPageHeader, CatalogScreen, EmptyState, StatusDot, ToneDot, formatCnpj, formatDate, primaryButtonClass, relativeTime, secondaryButtonClass, statusLabel, type Tone } from './catalogUi';
 import AddCatalogDeploymentUnitDialog from './AddCatalogDeploymentUnitDialog';
 
 const resumableStatuses: DeploymentStatus[] = ['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'];
 const stepLabels: Record<string, string> = { vercel_register_project_domain: 'Cadastrar domínio em Production', vercel_configure_production_access: 'Configurar acesso público', vercel_validate_main_release: 'Validar release', vercel_assign_storefront_alias: 'Associar domínio à release', storefront_validate_identity: 'Validar loja pública' };
+const attentionStatuses: DeploymentStatus[] = ['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'];
+const editableStatuses: DeploymentStatus[] = ['draft', ...attentionStatuses];
+const compactButtonClass = 'inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50';
 const processingStatuses: DeploymentStatus[] = ['queued', 'provisioning_hub', 'validating_hub_catalog', 'provisioning_unicommerce', 'validating_unicommerce', 'importing_banco_unico', 'waiting_storefront', 'waiting_storefront_release'];
 const stages = [
   { key: 'hub', label: 'Estrutura no Hub', statuses: ['queued', 'provisioning_hub'] },
@@ -25,7 +28,8 @@ function atenderBemProgress(deployment: Deployment) {
   const processing = deployment.units.some(unit => ['uploading', 'queued', 'running', 'reindexing'].includes(unit.atenderBemConfig?.import?.status || ''));
   const attention = deployment.units.some(unit => ['failed', 'cancelled', 'unknown', 'failed_before_import', 'reindex_unknown'].includes(unit.atenderBemConfig?.import?.status || '') || Boolean(unit.atenderBemConfig?.import?.errors));
   const done = deployment.units.length > 0 && completed === deployment.units.length;
-  return { completed, configured, processing, done, label: done ? 'Concluído' : processing ? 'Em andamento' : attention ? 'Atenção necessária' : configured ? 'Configuração salva' : 'Pendente' };
+  const tone: Tone = done ? 'success' : processing ? 'info' : attention ? 'danger' : 'neutral';
+  return { completed, configured, processing, done, tone, label: done ? 'Concluído' : processing ? 'Em andamento' : attention ? 'Atenção necessária' : configured ? 'Configuração salva' : 'Pendente' };
 }
 
 function DeploymentProgress({ deployment }: { deployment: Deployment }) {
@@ -35,21 +39,27 @@ function DeploymentProgress({ deployment }: { deployment: Deployment }) {
     : stages;
   const visibleStages = [...baseStages, { key: 'atenderbem', label: 'AtenderBem', statuses: [] }, { key: 'ia', label: 'IA', statuses: [] }];
   const aiDone = deployment.units.length > 0 && deployment.units.every(unit => unit.atenderBemConfig?.ai?.status === 'created');
-  const activeIndex = deployment.status === 'completed' ? baseStages.length : Math.max(0, baseStages.findIndex(stage => stage.statuses.includes(deployment.status)));
-  return <section className="rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-6">
-    <div className="flex items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-slate-950">Progresso da implantação</h2><p className="mt-1 text-sm text-slate-600">Acompanhe a implantação e prepare a conexão final com o AtenderBem.</p></div>{processingStatuses.includes(deployment.status) ? <span className="inline-flex shrink-0 items-center gap-2 text-xs font-medium text-primary">Ao vivo</span> : null}</div>
-    <ol className={`mt-7 grid gap-4 ${deployment.flowMode === 'hub_banco_only' ? 'sm:grid-cols-5' : 'sm:grid-cols-4 lg:grid-cols-7'}`}>
-      {visibleStages.map((stage, index) => {
-        const ai = stage.key === 'ia';
-        const final = stage.key === 'atenderbem' || ai;
-        const done = ai ? aiDone : final ? atenderBem.done : index < activeIndex || deployment.status === 'completed';
-        const active = ai ? !done && atenderBem.done : final ? !done && (atenderBem.processing || deployment.status === 'completed') : index === activeIndex && deployment.status !== 'completed';
-        const content = <><span className={`flex size-8 shrink-0 items-center justify-center rounded-full border-2 ${done ? 'border-emerald-600 bg-emerald-600 text-white' : active ? 'border-primary bg-primary text-white' : 'border-slate-200 bg-white text-slate-600'}`}>{done ? <Check className="size-4" /> : final ? <ArrowRight className="size-4" /> : active ? <Loader2 className={`size-4 ${processingStatuses.includes(deployment.status) ? 'animate-spin' : ''}`} /> : <Circle className="size-3" />}</span><span className={`text-xs font-semibold ${done ? 'text-emerald-700' : active || final ? 'text-primary' : 'text-slate-600'}`}>{stage.label}</span></>;
-        return <li key={stage.key} className="relative">
-          {index < visibleStages.length - 1 && <span aria-hidden="true" className={`absolute left-8 right-0 top-4 hidden h-0.5 sm:block ${done ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
-          {final ? <Link to={`/main/catalogo/${deployment.id}/${ai ? 'ia' : 'atenderbem'}`} aria-label={ai ? (aiDone ? 'IA criada; revisar' : 'Criar a IA de atendimento') : atenderBem.done ? 'Etapa AtenderBem concluída; revisar configuração' : 'Configurar etapa AtenderBem'} className="relative z-10 flex items-center gap-3 rounded-lg focus-visible:outline-2 focus-visible:outline-primary sm:items-start sm:flex-col">{content}</Link> : <div className="relative z-10 flex items-center gap-3 sm:items-start sm:flex-col">{content}</div>}
-        </li>;
-      })}
+  // Failed or cancelled deployments keep their position through currentStage.
+  const statusIndex = baseStages.findIndex(stage => stage.statuses.includes(deployment.status));
+  const stageIndex = deployment.currentStage ? baseStages.findIndex(stage => stage.statuses.includes(deployment.currentStage!)) : -1;
+  const activeIndex = deployment.status === 'completed' ? baseStages.length : Math.max(0, statusIndex >= 0 ? statusIndex : stageIndex);
+  const halted = attentionStatuses.includes(deployment.status) || deployment.status === 'cancelled';
+  const states = visibleStages.map((stage, index) => {
+    const ai = stage.key === 'ia';
+    const final = stage.key === 'atenderbem' || ai;
+    const done = ai ? aiDone : final ? atenderBem.done : index < activeIndex || deployment.status === 'completed';
+    const active = ai ? !done && atenderBem.done : final ? !done && (atenderBem.processing || deployment.status === 'completed') : index === activeIndex && deployment.status !== 'completed';
+    return { ...stage, done, active, stopped: !final && active && halted };
+  });
+  const doneCount = states.filter(stage => stage.done).length;
+  const current = states.find(stage => stage.active) ?? states.find(stage => !stage.done);
+  return <section aria-label="Etapas da implantação">
+    <p className="text-xs text-slate-600"><span className="font-medium tabular-nums text-slate-900">{doneCount} de {states.length}</span> etapas concluídas{current ? <> · {current.stopped ? 'parada em' : 'agora'} <span className={`font-medium ${current.stopped ? 'text-rose-700' : 'text-slate-900'}`}>{current.label}</span></> : null}</p>
+    <ol className="mt-2 flex gap-1">
+      {states.map(stage => <li key={stage.key} className="min-w-0 flex-1" aria-current={stage.active ? 'step' : undefined}>
+        <span aria-hidden="true" className={`block h-1 rounded-full ${stage.done ? 'bg-emerald-500' : stage.stopped ? 'bg-rose-500' : stage.active ? 'bg-primary' : 'bg-slate-200'}`} />
+        <span className={`mt-1.5 hidden truncate text-[11px] sm:block ${stage.active ? 'font-medium text-slate-900' : 'text-slate-500'}`} title={stage.label}>{stage.label}<span className="sr-only">{stage.done ? ' (concluída)' : stage.active ? ' (atual)' : ''}</span></span>
+      </li>)}
     </ol>
   </section>;
 }
@@ -76,34 +86,72 @@ function AtenderBemImportStatus({ deploymentId, unit, onRefresh }: { deploymentI
   }, [jobId, status, check]);
   if (!progress) return null;
   const labels: Record<string, string> = { uploading: 'Enviando CSV', queued: 'Importação na fila', running: 'Importando produtos', completed: 'Importação concluída; reindexação solicitada', failed: 'Importação falhou', cancelled: 'Importação cancelada', unknown: 'Confira a importação no AtenderBem antes de repetir', reindexing: 'Solicitando reindexação', reindex_unknown: 'Produtos importados; confira a reindexação no AtenderBem', failed_before_import: 'Falha no envio do CSV' };
-  return <div className="mt-4 rounded-lg border border-slate-200 p-4">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">{unit.name}</h3><p role="status" className="mt-1 text-sm text-slate-700">{labels[progress.status] || progress.status}{jobId ? ` · Execução ${jobId}` : ''}</p></div>{jobId && ['queued', 'running', 'failed', 'cancelled'].includes(progress.status) && <button type="button" disabled={busy} className={secondaryButtonClass} onClick={() => void check()}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Atualizar andamento</button>}</div>
-    {progress.total !== undefined && <p className="mt-2 text-xs text-slate-600">{progress.processed || 0} de {progress.total} processados · {progress.created || 0} criados · {progress.updated || 0} atualizados · {progress.errors || 0} erros</p>}
-    {error && <p role="alert" className="mt-2 text-sm text-rose-700">{error}</p>}
-  </div>;
+  const tone: Tone = progress.status === 'completed' && !progress.errors ? 'success' : ['failed', 'cancelled', 'failed_before_import'].includes(progress.status) || progress.errors ? 'danger' : ['unknown', 'reindex_unknown'].includes(progress.status) ? 'warning' : 'info';
+  return <li className="py-3">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-slate-900" title={unit.name}>{unit.name}</p>
+        <p role="status" className="mt-0.5 flex min-w-0 items-center gap-2 text-xs"><ToneDot tone={tone} label={labels[progress.status] || progress.status} className="text-xs" />{jobId ? <span className="shrink-0 tabular-nums text-slate-500">Execução {jobId}</span> : null}</p>
+      </div>
+      {jobId && ['queued', 'running', 'failed', 'cancelled'].includes(progress.status) && <button type="button" disabled={busy} className={compactButtonClass} onClick={() => void check()}>{busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}Atualizar andamento</button>}
+    </div>
+    {progress.total !== undefined && <p className="mt-1.5 text-xs tabular-nums text-slate-600">{(progress.processed || 0).toLocaleString('pt-BR')} de {progress.total.toLocaleString('pt-BR')} processados · {(progress.created || 0).toLocaleString('pt-BR')} criados · {(progress.updated || 0).toLocaleString('pt-BR')} atualizados · {progress.errors || 0} erros</p>}
+    {error && <p role="alert" className="mt-1.5 text-xs text-rose-700">{error}</p>}
+  </li>;
 }
 
-function AtenderBemFinalStep({ deployment, onRefresh }: { deployment: Deployment; onRefresh: () => Promise<void> }) {
-  const { configured, completed, done, label } = atenderBemProgress(deployment);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const detailsId = `atenderbem-details-${deployment.id}`;
-  if (done) return <div className="mt-4">
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-      <button type="button" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen(current => !current)} className="inline-flex min-h-9 items-center gap-2 rounded text-sm font-medium text-slate-600 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-primary"><ArrowRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${detailsOpen ? 'rotate-90' : ''}`} />Ver detalhes da importação</button>
-      <Link className="inline-flex min-h-9 items-center rounded text-sm text-slate-500 underline underline-offset-4 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-primary" to={`/main/catalogo/${deployment.id}/atenderbem`}>Revisar configuração</Link>
+type Step = { title: string; description: string; to: string; cta: string; icon?: 'images' };
+
+function nextStep(deployment: Deployment): Step | null {
+  const base = `/main/catalogo/${deployment.id}`;
+  if (deployment.status === 'cancelled' || attentionStatuses.includes(deployment.status)) return null;
+  if (deployment.status === 'draft' && deployment.flowMode === 'full') {
+    const confirmed = deployment.assets.filter((asset) => asset.status === 'confirmed').length;
+    const total = deployment.assets.length;
+    return { title: 'Concluir a identidade visual', description: `${total ? `${confirmed} de ${total} imagens confirmadas. ` : ''}Envie ou revise as imagens antes de iniciar; as já confirmadas são mantidas.`, to: `${base}/imagens`, cta: 'Enviar imagens', icon: 'images' };
+  }
+  if (deployment.status === 'awaiting_activation') return { title: 'Revisar e ativar', description: 'Todas as etapas de preparação terminaram. Confira as unidades e ative o catálogo.', to: `${base}/revisao`, cta: 'Revisar ativação' };
+  const atenderBem = atenderBemProgress(deployment);
+  const aiDone = deployment.units.length > 0 && deployment.units.every(unit => unit.atenderBemConfig?.ai?.status === 'created');
+  if (atenderBem.done && aiDone) return null;
+  if (atenderBem.done) return { title: 'Criar a IA de atendimento', description: 'Assistente, URAs e automações com os dados desta implantação.', to: `${base}/ia`, cta: 'Criar IA' };
+  return { title: 'Conectar catálogo ao AtenderBem', description: atenderBem.configured ? `${atenderBem.configured} de ${deployment.units.length} unidades configuradas · ${atenderBem.label.toLowerCase()}.` : 'Instância, acesso ao CSV e grupo de produtos por unidade.', to: `${base}/atenderbem`, cta: atenderBem.configured ? 'Continuar' : 'Configurar' };
+}
+
+function NextStep({ deployment, onRefresh }: { deployment: Deployment; onRefresh: () => Promise<void> }) {
+  const step = nextStep(deployment);
+  if (!step) return null;
+  const importing = step.to.endsWith('/atenderbem');
+  const activeImports = importing ? deployment.units.filter(unit => unit.atenderBemConfig?.import && !(unit.atenderBemConfig.import.status === 'completed' && !unit.atenderBemConfig.import.errors)) : [];
+  return <section aria-labelledby="next-step-title" className="rounded-xl border border-slate-200 px-5 py-4 sm:px-6">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-primary">Próximo passo</p>
+        <h2 id="next-step-title" className="mt-0.5 text-sm font-semibold text-slate-950">{step.title}</h2>
+        <p className="mt-0.5 max-w-[70ch] text-sm leading-6 text-slate-600">{step.description}</p>
+      </div>
+      <Link className={`${primaryButtonClass} shrink-0`} to={step.to}>{step.icon === 'images' ? <ImagePlus className="size-4" /> : null}{step.cta}{step.icon ? null : <ArrowRight className="size-4" />}</Link>
     </div>
-    <div id={detailsId} hidden={!detailsOpen} className="mt-3 w-full min-w-0">
-      <p className="text-xs leading-5 text-slate-600">{completed} de {deployment.units.length} unidades com importação concluída. Reindexação solicitada para a pesquisa da IA.</p>
-      {deployment.units.map(unit => <AtenderBemImportStatus key={unit.id} deploymentId={deployment.id} unit={unit} onRefresh={onRefresh} />)}
-    </div>
-  </div>;
-  return <section className="mt-6 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:p-6" aria-labelledby="atenderbem-final-title">
-    <div className="flex flex-col items-start justify-between gap-5 sm:flex-row sm:items-center">
-      <div className="max-w-2xl"><div className="flex flex-wrap items-center gap-3"><h2 id="atenderbem-final-title" className="text-base font-semibold text-slate-950">{done ? 'Catálogo conectado ao AtenderBem' : 'Conectar catálogo ao AtenderBem'}</h2><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${done ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>{label}</span></div><p className="mt-2 text-sm leading-6 text-slate-600">{done ? 'A importação foi concluída e os produtos foram enfileirados para reindexação na pesquisa da IA.' : 'Etapa final para disponibilizar os produtos na pesquisa da IA. Informe a instância, o acesso ao CSV e o grupo de produtos por unidade.'}</p><p className="mt-2 text-xs leading-5 text-slate-600">{completed ? `${completed} de ${deployment.units.length} unidades com importação concluída. Acompanhe os resultados abaixo.` : configured ? `${configured} de ${deployment.units.length} unidades com dados salvos. Acompanhe as importações abaixo.` : 'Disponível para catálogo completo, Hub e Banco Único e implantações anteriores.'}</p></div>
-      <Link className={`${primaryButtonClass} shrink-0`} to={`/main/catalogo/${deployment.id}/atenderbem`}>{done ? 'Revisar configuração' : configured ? 'Continuar configuração' : 'Configurar AtenderBem'}<ArrowRight className="size-4" /></Link>
-    </div>
-    {deployment.units.filter(unit => unit.atenderBemConfig?.import).map(unit => <AtenderBemImportStatus key={unit.id} deploymentId={deployment.id} unit={unit} onRefresh={onRefresh} />)}
+    {activeImports.length ? <ul className="mt-3 divide-y divide-slate-100 border-t border-slate-100">{activeImports.map(unit => <AtenderBemImportStatus key={unit.id} deploymentId={deployment.id} unit={unit} onRefresh={onRefresh} />)}</ul> : null}
   </section>;
+}
+
+type Feedback = { tone: 'success' | 'error'; text: string };
+
+// Result of an action the operator just took; success fades on its own, errors stay until dismissed.
+function FeedbackNotice({ feedback, onDismiss }: { feedback: Feedback; onDismiss: () => void }) {
+  useEffect(() => {
+    if (feedback.tone !== 'success') return;
+    const timer = window.setTimeout(onDismiss, 8000);
+    return () => window.clearTimeout(timer);
+  }, [feedback, onDismiss]);
+  const error = feedback.tone === 'error';
+  const Icon = error ? TriangleAlert : CheckCircle2;
+  return <div role={error ? 'alert' : 'status'} className={`flex items-start gap-3 rounded-lg border py-2.5 pl-4 pr-2 text-sm rise-in ${error ? 'border-rose-200 bg-rose-50 text-rose-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+    <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${error ? 'text-rose-600' : 'text-emerald-600'}`} />
+    <p className="min-w-0 flex-1 py-px leading-5 [overflow-wrap:anywhere]">{feedback.text}</p>
+    <button type="button" onClick={onDismiss} aria-label="Fechar aviso" className={`-my-1 flex size-8 shrink-0 items-center justify-center rounded-md transition focus-visible:outline-2 focus-visible:outline-primary ${error ? 'text-rose-700 hover:bg-rose-100' : 'text-emerald-700 hover:bg-emerald-100'}`}><X className="size-4" /></button>
+  </div>;
 }
 
 const eventLabels: Record<string, string> = {
@@ -128,9 +176,36 @@ const eventLabels: Record<string, string> = {
   atenderbem_import_started: 'Importação de produtos no AtenderBem iniciada',
 };
 
+function eventTitle(event: DeploymentEvent) {
+  const step = typeof event.safeMetadata?.step === 'string' ? stepLabels[event.safeMetadata.step] : undefined;
+  if (step) return `${step} · ${event.eventType === 'step_completed' ? 'Concluído' : event.eventType === 'step_failed' ? 'Falhou' : 'Iniciado'}`;
+  return eventLabels[event.eventType] || statusLabel((event.toStatus || event.eventType) as DeploymentStatus);
+}
+
+const TIMELINE_PREVIEW = 5;
+
 function DeploymentTimeline({ events, units }: { events: DeploymentEvent[]; units: DeploymentUnit[] }) {
+  const [expanded, setExpanded] = useState(false);
   const reversed = [...events].reverse();
-  return <section className="rounded-xl border border-[#dbe3ef] bg-white"><div className="border-b border-[#dbe3ef] px-5 py-4 sm:px-6"><h2 className="text-base font-semibold text-slate-950">Linha do tempo</h2><p className="mt-0.5 text-xs text-slate-500">Últimos eventos desta implantação.</p></div><ol className="px-5 py-2 sm:px-6">{reversed.length ? reversed.map((event, index) => { const unit = units.find((item) => item.id === event.unitId); const danger = event.eventType.includes('failed'); return <li key={event.id} className="relative flex gap-4 py-4 before:absolute before:bottom-0 before:left-[7px] before:top-8 before:w-px before:bg-slate-200 last:before:hidden"><span className={`relative z-10 mt-1 size-4 shrink-0 rounded-full border-[3px] border-white ${danger ? 'bg-rose-500' : index === 0 ? 'bg-primary' : 'bg-slate-300'}`} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-start justify-between gap-2"><p className="text-sm font-semibold text-slate-800">{(typeof event.safeMetadata?.step === 'string' && stepLabels[event.safeMetadata.step] ? `${stepLabels[event.safeMetadata.step]} · ${event.eventType === 'step_completed' ? 'Concluído' : event.eventType === 'step_failed' ? 'Falhou' : 'Iniciado'}` : eventLabels[event.eventType]) || statusLabel((event.toStatus || event.eventType) as DeploymentStatus)}</p><time className="text-xs text-slate-400">{formatDate(event.createdAt)}</time></div><p className="mt-1 text-xs text-slate-500">{unit ? `${unit.name} · ` : ''}{event.createdBy ? `por ${event.createdBy}` : 'Atualização automática'}{event.fromStatus && event.toStatus ? ` · ${statusLabel(event.fromStatus as DeploymentStatus)} → ${statusLabel(event.toStatus as DeploymentStatus)}` : ''}</p></div></li>; }) : <li className="py-8 text-center text-sm text-slate-500">Nenhum evento registrado.</li>}</ol></section>;
+  const visible = expanded ? reversed : reversed.slice(0, TIMELINE_PREVIEW);
+  return <section aria-labelledby="timeline-title" className="min-w-0">
+    <div className="flex items-baseline justify-between gap-3"><h2 id="timeline-title" className="text-sm font-semibold text-slate-950">Linha do tempo</h2><span className="text-xs tabular-nums text-slate-500">{events.length} {events.length === 1 ? 'evento' : 'eventos'}</span></div>
+    <div className="mt-2">
+      {reversed.length ? <ol>{visible.map((event, index) => {
+        const unit = units.find((item) => item.id === event.unitId);
+        const danger = event.eventType.includes('failed');
+        const title = eventTitle(event);
+        return <li key={event.id} className="relative flex gap-3 py-3 before:absolute before:bottom-0 before:left-[3px] before:top-6 before:w-px before:bg-slate-200 last:before:hidden">
+          <span aria-hidden="true" className={`relative mt-1.5 size-[7px] shrink-0 rounded-full ${danger ? 'bg-rose-500' : index === 0 ? 'bg-primary' : 'bg-slate-300'}`} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-3"><p className={`line-clamp-2 min-w-0 text-sm font-medium ${danger ? 'text-rose-700' : 'text-slate-900'}`} title={title}>{title}</p><time dateTime={event.createdAt} title={formatDate(event.createdAt)} className="shrink-0 whitespace-nowrap text-xs text-slate-500">{relativeTime(event.createdAt)}</time></div>
+            {unit ? <p className="mt-0.5 truncate text-xs text-slate-500" title={unit.name}>{unit.name}</p> : null}
+          </div>
+        </li>;
+      })}</ol> : <p className="py-8 text-center text-sm text-slate-500">Nenhum evento registrado.</p>}
+      {reversed.length > TIMELINE_PREVIEW ? <button type="button" onClick={() => setExpanded(current => !current)} aria-expanded={expanded} className="mb-2 mt-1 inline-flex min-h-9 items-center gap-1.5 rounded text-sm font-medium text-slate-600 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-primary"><ChevronDown aria-hidden="true" className={`size-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />{expanded ? 'Mostrar menos' : `Mostrar todos (${reversed.length})`}</button> : null}
+    </div>
+  </section>;
 }
 
 function runStatusLabel(status: string | null | undefined) {
@@ -138,41 +213,93 @@ function runStatusLabel(status: string | null | undefined) {
   return status ? labels[status] || status : 'Aguardando';
 }
 
-function UnitStatusCard({ deployment, unit, busyAction, onAction }: { deployment: Deployment; unit: DeploymentUnit; busyAction: string; onAction: (action: 'retry' | 'run' | 'activate', unit: DeploymentUnit) => void }) {
-  const busy = busyAction.endsWith(unit.id);
-  const run = unit.hubRun;
-  return <article className="rounded-xl border border-[#dbe3ef] bg-white p-5">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600"><Store className="size-5" /></span><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-slate-950">{unit.name}</h3><p className="mt-1 text-xs text-slate-500">{unit.code} · {formatCnpj(unit.cnpj)}{unit.isInitial ? ' · Inicial' : ''}</p></div></div><StatusBadge status={unit.status} /></div>
-    <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 border-t border-slate-200 pt-4 text-xs">
-      <div><dt className="text-slate-500">ERP integrado</dt><dd className="mt-1 font-semibold text-slate-800">{catalogErpName(unit.erpId, unit.provider)}{unit.sourceUnitId ? ` #${unit.sourceUnitId}` : ''}</dd></div>
-      <div><dt className="text-slate-500">Itens válidos</dt><dd className="mt-1 font-semibold tabular-nums text-slate-800">{unit.latestValidRows?.toLocaleString('pt-BR') ?? '—'}</dd></div>
-      <div><dt className="text-slate-500">ID no Hub</dt><dd className="mt-1 truncate font-mono text-[11px] font-semibold text-slate-800">{unit.hubSellerUnitId ?? '—'}</dd></div>
-      {deployment.flowMode === 'hub_banco_only' ? <div><dt className="text-slate-500">Cobertura Banco Único</dt><dd className="mt-1 font-semibold text-slate-800">{unit.coveragePercent !== null && unit.coveragePercent !== undefined ? `${unit.coveragePercent.toFixed(1)}%` : '—'}</dd></div> : <div><dt className="text-slate-500">Tenant</dt><dd className="mt-1 truncate font-mono text-[11px] font-semibold text-slate-800">{unit.unicommerceTenantId ?? '—'}</dd></div>}
-    </dl>
-    {run ? <div className={`mt-4 rounded-lg border px-3 py-3 text-xs ${run.status === 'delayed' ? 'border-amber-200 bg-amber-50 text-amber-900' : run.status === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-blue-100 bg-blue-50 text-blue-900'}`}><div className="flex items-center justify-between gap-3"><span className="font-semibold">{runStatusLabel(run.status)}</span><code className="text-[11px]">Run {run.runId.slice(0, 8)}</code></div><dl className="mt-3 grid grid-cols-3 gap-3"><div><dt className="opacity-70">Processados</dt><dd className="mt-1 font-semibold tabular-nums">{run.processedRows?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="opacity-70">Válidos</dt><dd className="mt-1 font-semibold tabular-nums">{run.validRows?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="opacity-70">Publicados</dt><dd className="mt-1 font-semibold tabular-nums">{run.publishedRows?.toLocaleString('pt-BR') ?? '—'}</dd></div></dl><p className="mt-3 opacity-70">Última consulta: {formatDate(run.lastPolledAt)}</p></div> : null}
-    {unit.lastErrorMessage ? <div className="mt-4 rounded-lg bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-700">{unit.lastErrorMessage}</div> : null}
-    <div className="mt-4 flex flex-wrap gap-2">
-      {unit.storefrontUrl && unit.storefrontStatus === 'ready' ? <a href={unit.storefrontUrl} target="_blank" rel="noreferrer" className={secondaryButtonClass}><Store className="size-4" />Abrir loja</a> : null}
-      {['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <Link to={`/main/catalogo/${deployment.id}/corrigir?unit=${unit.id}`} className={secondaryButtonClass}><PencilLine className="size-4" />Corrigir dados</Link> : null}
-      {resumableStatuses.includes(deployment.status) && (['failed', 'reconciliation_required'].includes(unit.status) || unit.lastErrorCode) ? <button type="button" onClick={() => onAction('retry', unit)} title="Continuar após a última etapa confirmada desta unidade" disabled={Boolean(busyAction)} className={secondaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar unidade</button> : null}
-      {unit.publicationMode === 'shadow' && unit.status === 'activating_shadow' ? <button type="button" onClick={() => onAction('activate', unit)} disabled={busy} className={secondaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Reenviar ativação</button> : null}
-      {unit.hubIntegrationId && ['failed', 'catalog_active'].includes(unit.status) ? <button type="button" onClick={() => onAction('run', unit)} disabled={busy} className={secondaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}Executar nova carga</button> : null}
-      {unit.status === 'failed' && deployment.status === 'failed' ? <span className="self-center text-xs text-slate-500">A retomada preserva as etapas concluídas. Corrija a causa indicada antes de continuar.</span> : null}
-    </div>
-  </article>;
+function UnitFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return <div className="min-w-0"><dt className="text-xs text-slate-500">{label}</dt><dd className={`mt-0.5 truncate text-sm text-slate-900 ${mono ? 'font-mono text-xs leading-5' : 'font-medium tabular-nums'}`} title={value}>{value}</dd></div>;
 }
 
-function ErrorResolutionCard({ deployment, onRetry, onReconciliation, busy }: { deployment: Deployment; onRetry: () => void; onReconciliation: () => void; busy: boolean }) {
+function UnitRow({ deployment, unit, busyAction, onAction }: { deployment: Deployment; unit: DeploymentUnit; busyAction: string; onAction: (action: 'retry' | 'run' | 'activate', unit: DeploymentUnit) => void }) {
+  const [open, setOpen] = useState(false);
+  const busy = busyAction.endsWith(unit.id);
+  const run = unit.hubRun;
+  const runTone: Tone = run?.status === 'delayed' ? 'warning' : run?.status === 'failed' ? 'danger' : run?.status === 'published' ? 'success' : 'info';
+  const canRetry = resumableStatuses.includes(deployment.status) && (['failed', 'reconciliation_required'].includes(unit.status) || Boolean(unit.lastErrorCode));
+  const canActivate = unit.publicationMode === 'shadow' && unit.status === 'activating_shadow';
+  const canRun = Boolean(unit.hubIntegrationId) && ['failed', 'catalog_active'].includes(unit.status);
+  const canOpenStore = Boolean(unit.storefrontUrl) && unit.storefrontStatus === 'ready';
+  const canEdit = editableStatuses.includes(deployment.status);
+  const detailsId = `unit-details-${unit.id}`;
+  return <li className="px-5 py-4 sm:px-6">
+    <div className="flex items-start justify-between gap-4">
+      <button type="button" aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen(current => !current)} className="group flex min-w-0 items-start gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+        <ChevronDown aria-hidden="true" className={`mt-0.5 size-4 shrink-0 text-slate-400 transition-transform group-hover:text-slate-700 ${open ? 'rotate-180' : ''}`} />
+        <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold text-slate-950" title={unit.name}>{unit.name}</span>
+        <span className="mt-0.5 block truncate text-xs tabular-nums text-slate-500">{unit.code} · {formatCnpj(unit.cnpj)}{unit.isInitial ? ' · Inicial' : ''}</span>
+        </span>
+      </button>
+      <span className="min-w-0 max-w-[45%] shrink-0"><StatusDot status={unit.status} /></span>
+    </div>
+    <div id={detailsId} hidden={!open} className="pl-6">
+    <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+      <UnitFact label="ERP integrado" value={`${catalogErpName(unit.erpId, unit.provider)}${unit.sourceUnitId ? ` #${unit.sourceUnitId}` : ''}`} />
+      <UnitFact label="Itens válidos" value={unit.latestValidRows?.toLocaleString('pt-BR') ?? '—'} />
+      <UnitFact label="ID no Hub" value={unit.hubSellerUnitId ?? '—'} mono={Boolean(unit.hubSellerUnitId)} />
+      {deployment.flowMode === 'hub_banco_only'
+        ? <UnitFact label="Cobertura Banco Único" value={unit.coveragePercent !== null && unit.coveragePercent !== undefined ? `${unit.coveragePercent.toFixed(1)}%` : '—'} />
+        : <UnitFact label="Tenant" value={unit.unicommerceTenantId ?? '—'} mono={Boolean(unit.unicommerceTenantId)} />}
+    </dl>
+    {run ? <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+      <div className="flex items-center justify-between gap-3"><ToneDot tone={runTone} label={`Carga no Hub · ${runStatusLabel(run.status)}`} className="text-xs" /><code className="shrink-0 text-[11px] text-slate-600" title={run.runId}>Run {run.runId.slice(0, 8)}</code></div>
+      <dl className="mt-2.5 grid grid-cols-3 gap-3 text-xs">
+        <div><dt className="text-slate-500">Processados</dt><dd className="mt-0.5 font-semibold tabular-nums text-slate-900">{run.processedRows?.toLocaleString('pt-BR') ?? '—'}</dd></div>
+        <div><dt className="text-slate-500">Válidos</dt><dd className="mt-0.5 font-semibold tabular-nums text-slate-900">{run.validRows?.toLocaleString('pt-BR') ?? '—'}</dd></div>
+        <div><dt className="text-slate-500">Publicados</dt><dd className="mt-0.5 font-semibold tabular-nums text-slate-900">{run.publishedRows?.toLocaleString('pt-BR') ?? '—'}</dd></div>
+      </dl>
+      <p className="mt-2 text-xs text-slate-500">Última consulta {run.lastPolledAt ? relativeTime(run.lastPolledAt) : '—'}</p>
+    </div> : null}
+    </div>
+    {unit.lastErrorMessage ? <p className="ml-6 mt-2 flex gap-1.5 text-xs leading-5 text-rose-700"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{unit.lastErrorMessage}</span></p> : null}
+    {canOpenStore || canEdit || canRetry || canActivate || canRun ? <div className="ml-6 mt-3 flex flex-wrap items-center gap-2">
+      {canOpenStore ? <a href={unit.storefrontUrl!} target="_blank" rel="noreferrer" className={compactButtonClass}><Store className="size-3.5" />Abrir loja<ExternalLink aria-hidden="true" className="size-3 text-slate-500" /></a> : null}
+      {canEdit ? <Link to={`/main/catalogo/${deployment.id}/corrigir?unit=${unit.id}`} className={compactButtonClass}><PencilLine className="size-3.5" />Corrigir dados</Link> : null}
+      {canRetry ? <button type="button" onClick={() => onAction('retry', unit)} title="Continuar após a última etapa confirmada desta unidade" disabled={Boolean(busyAction)} className={compactButtonClass}>{busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}Retomar unidade</button> : null}
+      {canActivate ? <button type="button" onClick={() => onAction('activate', unit)} disabled={busy} className={compactButtonClass}>{busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}Reenviar ativação</button> : null}
+      {canRun ? <button type="button" onClick={() => onAction('run', unit)} disabled={busy} className={compactButtonClass}>{busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}Executar nova carga</button> : null}
+    </div> : null}
+  </li>;
+}
+
+const stageNames: Record<string, string> = {
+  validation: 'Validação', configuration: 'Configuração', security: 'Segurança', assets: 'Imagens', hub: 'Hub', unicommerce: 'Unicommerce',
+  creating_seller: 'Criação do seller', creating_units: 'Criação das unidades', creating_integrations: 'Criação das integrações', updating_integration: 'Atualização da integração',
+  scheduling_sync: 'Agendamento da carga', adding_unit: 'Inclusão de unidade', editing_unit: 'Edição de unidade', activating_tenants: 'Ativação dos tenants',
+  activation: 'Ativação', promotion: 'Publicação', coverage: 'Cobertura do Banco Único', measuring_catalog_coverage: 'Cobertura do Banco Único',
+  provisioning_storefront: 'Criação da loja', validating_storefront: 'Validação da loja', atenderbem_configuration: 'Configuração do AtenderBem',
+  atenderbem_connection: 'Conexão com o AtenderBem', atenderbem_assistant: 'Assistente do AtenderBem', ai_creation: 'Criação da IA',
+};
+
+function stageName(stage: string) {
+  return stageNames[stage] || statusLabel(stage as DeploymentStatus);
+}
+
+// What went wrong, what to do, and where: the summary shows this instead of a generic headline.
+function deploymentIssue(deployment: Deployment) {
   const affectedUnit = deployment.units.find((unit) => unit.lastErrorCode);
   const eventError = [...deployment.events].reverse().find((event) => event.safeMetadata?.code && (!affectedUnit || event.unitId === affectedUnit.id))?.safeMetadata;
-  const errorCode = deployment.lastErrorCode || affectedUnit?.lastErrorCode;
-  const errorMessage = deployment.lastErrorMessage || affectedUnit?.lastErrorMessage;
-  const errorStage = typeof eventError?.stage === 'string' ? eventError.stage : deployment.currentStage;
-  const sellerAlreadyExists = errorCode === 'RECONCILIATION_REQUIRED' && errorStage === 'creating_seller';
+  const code = deployment.lastErrorCode || affectedUnit?.lastErrorCode || null;
+  const message = deployment.lastErrorMessage || affectedUnit?.lastErrorMessage;
+  const stage = typeof eventError?.stage === 'string' ? eventError.stage : deployment.currentStage;
+  const sellerAlreadyExists = code === 'RECONCILIATION_REQUIRED' && stage === 'creating_seller';
   const action = sellerAlreadyExists
-    ? 'O grupo já tem um seller no Hub. Retome a implantação para vinculá-lo e continuar a criação da filial.'
+    ? 'Retome a implantação para vincular a filial ao seller existente e continuar.'
     : typeof eventError?.action === 'string' ? eventError.action : deployment.lastErrorCode === 'HUB_EMPTY_CATALOG' ? 'Revise a carga e o vínculo da unidade antes de prosseguir.' : 'Revise a configuração indicada e tente novamente.';
-  return <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 sm:p-6"><div className="flex gap-4"><span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700"><TriangleAlert className="size-5" /></span><div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-600">{errorCode || 'Atenção necessária'}</p><h2 className="mt-1 text-base font-semibold text-rose-950">{sellerAlreadyExists ? 'O grupo já existe no Hub; a filial pode ser vinculada a ele.' : errorMessage || 'A implantação precisa de intervenção.'}</h2><p className="mt-2 text-sm leading-6 text-rose-800">{action}</p><dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-xs text-rose-800"><div><dt className="inline text-rose-600">Etapa: </dt><dd className="inline font-semibold">{errorStage ? statusLabel(errorStage as DeploymentStatus) : 'Não informada'}</dd></div><div><dt className="inline text-rose-600">Unidade: </dt><dd className="inline font-semibold">{affectedUnit?.name || 'Implantação geral'}</dd></div></dl><p className="mt-3 text-xs leading-5 text-rose-800">A retomada continua após a última etapa confirmada, preservando os recursos e as unidades já concluídos.</p><div className="mt-5 flex flex-wrap gap-3">{resumableStatuses.includes(deployment.status) ? <button type="button" onClick={onRetry} disabled={busy} className={primaryButtonClass}>{busy ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar implantação</button> : null}{!sellerAlreadyExists && (deployment.status === 'reconciliation_required' || deployment.lastErrorCode === 'RECONCILIATION_REQUIRED') ? <button type="button" onClick={onReconciliation} className={secondaryButtonClass}><ExternalLink className="size-4" />Solicitar reconciliação</button> : null}</div></div></div></section>;
+  return {
+    title: sellerAlreadyExists ? 'O grupo já existe no Hub' : message || 'A implantação precisa de intervenção',
+    action,
+    where: [stage ? `Parou em ${stageName(stage)}` : null, affectedUnit?.name ?? null].filter(Boolean).join(' · '),
+    code,
+    canReconcile: !sellerAlreadyExists && (deployment.status === 'reconciliation_required' || deployment.lastErrorCode === 'RECONCILIATION_REQUIRED'),
+  };
 }
 
 function SellerTokenDialog({ deploymentId, requestedBy, onClose }: { deploymentId: string; requestedBy: string; onClose: () => void }) {
@@ -219,7 +346,8 @@ export default function CatalogDeploymentDetailsPage() {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [actionMessage, setActionMessage] = useState('');
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const dismissFeedback = useCallback(() => setFeedback(null), []);
   const [busyAction, setBusyAction] = useState('');
   const [refreshingRun, setRefreshingRun] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
@@ -270,14 +398,14 @@ export default function CatalogDeploymentDetailsPage() {
   async function handleDeploymentAction(action: 'retry' | 'cancel') {
     if (!deployment) return;
     setBusyAction(action);
-    setActionMessage('');
+    setFeedback(null);
     try {
       const updated = action === 'retry' ? await retryDeployment(deployment.id, requestedBy) : await cancelDeployment(deployment.id, requestedBy);
       setDeployment(updated);
       setShowCancel(false);
-      setActionMessage(action === 'retry' ? 'Retomada solicitada. Continuando após a última etapa confirmada.' : 'Implantação cancelada. Recursos externos já criados não foram excluídos.');
+      setFeedback({ tone: 'success', text: action === 'retry' ? 'Retomada solicitada. Continuando após a última etapa confirmada.' : 'Implantação cancelada. Recursos externos já criados não foram excluídos.' });
     } catch (caught) {
-      setActionMessage(caught instanceof Error ? caught.message : 'A ação não pôde ser concluída.');
+      setFeedback({ tone: 'error', text: caught instanceof Error ? caught.message : 'A ação não pôde ser concluída.' });
     } finally {
       setBusyAction('');
     }
@@ -286,7 +414,7 @@ export default function CatalogDeploymentDetailsPage() {
   async function handleUnitAction(action: 'retry' | 'run' | 'activate', unit: DeploymentUnit) {
     if (!deployment) return;
     setBusyAction(`${action}-${unit.id}`);
-    setActionMessage('');
+    setFeedback(null);
     try {
       const updated = action === 'retry'
         ? await retryUnit(deployment.id, unit.id, requestedBy)
@@ -294,9 +422,9 @@ export default function CatalogDeploymentDetailsPage() {
           ? await retryUnitShadowActivation(deployment.id, unit.id)
           : await runUnit(deployment.id, unit.id, requestedBy);
       setDeployment(updated);
-      setActionMessage('Ação solicitada. O acompanhamento foi retomado.');
+      setFeedback({ tone: 'success', text: 'Ação solicitada. O acompanhamento foi retomado.' });
     } catch (caught) {
-      setActionMessage(caught instanceof Error ? caught.message : 'A ação não pôde ser concluída.');
+      setFeedback({ tone: 'error', text: caught instanceof Error ? caught.message : 'A ação não pôde ser concluída.' });
     } finally {
       setBusyAction('');
     }
@@ -305,9 +433,9 @@ export default function CatalogDeploymentDetailsPage() {
   function handleUnitAdded(updated: Deployment) {
     setDeployment(updated);
     setShowAddUnit(false);
-    setActionMessage(updated.status === 'draft'
+    setFeedback({ tone: 'success', text: updated.status === 'draft'
       ? 'Filial adicionada ao grupo. Ela será processada quando você iniciar a implantação.'
-      : 'Filial adicionada ao seller existente. A carga do grupo foi enfileirada.');
+      : 'Filial adicionada ao seller existente. A carga do grupo foi enfileirada.' });
   }
 
   if (loading) return <CatalogScreen><CatalogPageHeader title="Carregando implantação" description="Buscando os dados mais recentes…" backTo="/main/catalogo" /><div className="flex flex-1 flex-col items-center justify-center gap-3 text-slate-500"><Loader2 className="size-7 animate-spin text-primary" /><p className="text-sm">Isso pode levar alguns minutos</p></div></CatalogScreen>;
@@ -321,22 +449,51 @@ export default function CatalogDeploymentDetailsPage() {
     {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}
   </CatalogScreen>;
 
+  const headline = deployment.status === 'awaiting_activation' ? 'Tudo pronto para a ativação'
+    : deployment.status === 'completed' ? deployment.flowMode === 'hub_banco_only' ? 'Carga concluída no Hub e Banco Único' : 'Catálogo ativo'
+      : processingStatuses.includes(deployment.status) ? statusLabel(deployment.status)
+        : deployment.status === 'draft' ? 'Rascunho aguardando início'
+          : deployment.status === 'cancelled' ? 'Implantação cancelada'
+            : attentionStatuses.includes(deployment.status) ? 'Implantação precisa de intervenção' : 'Acompanhamento da implantação';
+  const issue = attentionStatuses.includes(deployment.status) ? deploymentIssue(deployment) : null;
+  const canAddUnit = ['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required', 'awaiting_activation', 'completed'].includes(deployment.status);
+
   return <CatalogScreen>
-    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · @${deployment.username}`} backTo="/main/catalogo" action={<div className="flex items-center gap-2">{deployment.hubSellerId ? <button type="button" onClick={() => setShowSellerToken(true)} className={secondaryButtonClass}><KeyRound className="size-4" /><span className="hidden sm:inline">Token do Hub</span></button> : null}<button type="button" onClick={() => void (processingStatuses.includes(deployment.status) ? refreshRuns() : load(true))} disabled={refreshingRun} className="flex size-10 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-60" aria-label="Atualizar">{refreshingRun ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}</button>{['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <Link to={`/main/catalogo/${deployment.id}/corrigir`} className={secondaryButtonClass}><PencilLine className="size-4" /><span className="hidden sm:inline">Corrigir dados</span></Link> : null}{deployment.status === 'awaiting_activation' ? <Link to={`/main/catalogo/${deployment.id}/revisao`} className={primaryButtonClass}>Revisar ativação<ArrowRight className="size-4" /></Link> : null}</div>} />
-    <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto"><div className="mx-auto w-full max-w-[1280px] px-5 py-6 sm:px-8 lg:px-10 lg:py-8">
-      {deployment.status === 'draft' && deployment.flowMode === 'full' ? <section className="mb-6 flex flex-col gap-4 rounded-xl border border-blue-200 bg-blue-50 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"><div><h2 className="text-base font-semibold text-blue-950">Conclua a identidade visual</h2><p className="mt-1 text-sm leading-6 text-blue-900">Envie ou revise as oito imagens antes de iniciar a implantação. Os arquivos confirmados serão mantidos.</p></div><Link to={`/main/catalogo/${deployment.id}/imagens`} className={`${primaryButtonClass} shrink-0`}><ImagePlus className="size-4" />Enviar imagens</Link></section> : null}
-      <section className="mb-6 flex flex-col gap-4 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"><div><div className="flex flex-wrap items-center gap-3"><StatusBadge status={deployment.status} /><span className="text-xs text-slate-400">ID {deployment.id.slice(0, 8)}</span>{deployment.flowMode === 'hub_banco_only' ? <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Hub + Banco Único</span> : null}</div><h1 className="mt-3 text-2xl font-semibold tracking-[-0.035em] text-slate-950">{deployment.status === 'awaiting_activation' ? 'Tudo pronto para a ativação' : deployment.status === 'completed' ? deployment.flowMode === 'hub_banco_only' ? 'Carga concluída no Hub e Banco Único' : 'Catálogo ativo' : processingStatuses.includes(deployment.status) ? statusLabel(deployment.status) : 'Acompanhamento da implantação'}</h1><p className="mt-1 text-sm text-slate-500">Solicitado por {deployment.requestedBy} em {formatDate(deployment.createdAt)}.</p></div><div className="flex gap-3">{resumableStatuses.includes(deployment.status) ? <button type="button" onClick={() => void handleDeploymentAction('retry')} disabled={Boolean(busyAction)} className={secondaryButtonClass}>{busyAction === 'retry' ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar implantação</button> : null}{canCancel ? <button type="button" onClick={() => setShowCancel(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"><Ban className="size-4" />Cancelar</button> : null}</div></section>
-      {actionMessage ? <div role="status" className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{actionMessage}</div> : null}
-      {['failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required'].includes(deployment.status) ? <div className="mb-6"><ErrorResolutionCard deployment={deployment} onRetry={() => void handleDeploymentAction('retry')} onReconciliation={() => setActionMessage('Solicitação de reconciliação registrada para o time responsável.')} busy={Boolean(busyAction)} /></div> : null}
-      <DeploymentProgress deployment={deployment} />
-      <AtenderBemFinalStep deployment={deployment} onRefresh={refreshAtenderBem} />
-      <section className="mt-6 flex flex-col gap-4 rounded-xl border border-[#dbe3ef] bg-white p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6" aria-labelledby="ai-step-title">
-        <div className="max-w-2xl"><h2 id="ai-step-title" className="text-base font-semibold text-slate-950">Criação da IA</h2><p className="mt-2 text-sm leading-6 text-slate-600">Depois do AtenderBem, crie a IA de atendimento com os dados desta implantação: assistente, URAs e automações já configurados na instância.</p></div>
-        <Link className={`${primaryButtonClass} shrink-0`} to={`/main/catalogo/${deployment.id}/ia`}>{deployment.units.some(unit => unit.atenderBemConfig?.ai?.status === 'created') ? 'Revisar IA' : 'Criar IA'}<ArrowRight className="size-4" /></Link>
+    <CatalogPageHeader title={deployment.groupName} description={`${formatCnpj(deployment.groupCnpj)} · @${deployment.username}`} backTo="/main/catalogo" action={<div className="flex shrink-0 items-center gap-2">
+      {deployment.hubSellerId ? <button type="button" onClick={() => setShowSellerToken(true)} className={`${secondaryButtonClass} max-sm:hidden`} aria-label="Token do Hub" title="Token do Hub"><KeyRound className="size-4" /><span className="hidden md:inline">Token do Hub</span></button> : null}
+      <button type="button" onClick={() => void (processingStatuses.includes(deployment.status) ? refreshRuns() : load(true))} disabled={refreshingRun} className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-default" aria-label="Atualizar" title="Atualizar"><RefreshCw className={`size-4 ${refreshingRun ? 'motion-safe:animate-spin' : ''}`} /></button>
+      {editableStatuses.includes(deployment.status) ? <Link to={`/main/catalogo/${deployment.id}/corrigir`} className={secondaryButtonClass} aria-label="Corrigir dados" title="Corrigir dados"><PencilLine className="size-4" /><span className="hidden md:inline">Corrigir dados</span></Link> : null}
+    </div>} />
+    <main className="scrollbar-minimal min-h-0 flex-1 overflow-y-auto bg-white [scrollbar-gutter:stable]"><div className="mx-auto w-full max-w-[1280px] space-y-6 px-5 pb-12 pt-6 sm:px-8">
+      <section className="border-b border-slate-200 pb-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-8">
+          <div className="min-w-0 max-w-3xl">
+            <StatusDot status={deployment.status} />
+            <h1 className={`mt-2 font-semibold tracking-[-0.025em] text-slate-950 [overflow-wrap:anywhere] [text-wrap:balance] ${issue ? 'text-xl leading-7' : 'text-2xl'}`}>{issue ? issue.title : headline}</h1>
+            {issue ? <p className="mt-1.5 max-w-[70ch] text-sm leading-6 text-slate-700">{issue.action}</p> : null}
+            {issue && (issue.where || issue.code) ? <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-rose-700"><TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{issue.where}</span>{issue.code ? <code className="rounded border border-rose-200 bg-rose-50 px-1.5 font-mono text-[11px]">{issue.code}</code> : null}</p> : null}
+            <p className="mt-1.5 text-sm text-slate-500">{deployment.flowMode === 'hub_banco_only' ? 'Hub + Banco Único' : 'Implantação completa'} · por {deployment.requestedBy} em {formatDate(deployment.createdAt, false)} · atualizado <time dateTime={deployment.updatedAt} title={formatDate(deployment.updatedAt)}>{relativeTime(deployment.updatedAt)}</time></p>
+          </div>
+          {issue || canCancel ? <div className="flex shrink-0 flex-wrap items-center gap-2 md:mt-7">
+            {issue && resumableStatuses.includes(deployment.status) ? <button type="button" onClick={() => void handleDeploymentAction('retry')} disabled={Boolean(busyAction)} title="Continua após a última etapa confirmada, preservando o que já foi concluído" className={primaryButtonClass}>{busyAction === 'retry' ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}Retomar implantação</button> : null}
+            {issue?.canReconcile ? <button type="button" onClick={() => setFeedback({ tone: 'success', text: 'Solicitação de reconciliação registrada para o time responsável.' })} className={secondaryButtonClass}><ExternalLink className="size-4" />Solicitar reconciliação</button> : null}
+            {canCancel ? <button type="button" onClick={() => setShowCancel(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"><Ban className="size-4" />Cancelar</button> : null}
+          </div> : null}
+        </div>
+        <div className="mt-6"><DeploymentProgress deployment={deployment} /></div>
       </section>
-      {['draft', 'failed', 'partially_failed', 'monitoring_timeout', 'reconciliation_required', 'awaiting_activation', 'completed'].includes(deployment.status) ? <div className="mt-6 flex justify-end"><button type="button" onClick={() => setShowAddUnit(true)} className={secondaryButtonClass}><Plus className="size-4" />Adicionar unidade</button></div> : null}
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]"><div><div className="mb-3 flex items-center justify-between"><div><h2 className="text-base font-semibold text-slate-950">Unidades</h2><p className="mt-0.5 text-xs text-slate-500">Status operacional de cada origem.</p></div><span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600">{deployment.units.length}</span></div><div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">{deployment.units.map((unit) => <UnitStatusCard key={unit.id} deployment={deployment} unit={unit} busyAction={busyAction} onAction={(action, target) => void handleUnitAction(action, target)} />)}</div></div><DeploymentTimeline events={deployment.events} units={deployment.units} /></div>
-      <section className="mt-6 grid gap-4 sm:grid-cols-3"><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><Server className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Seller no Hub</p><p className="mt-1 truncate font-mono text-sm font-semibold text-slate-800">{deployment.hubSellerId || 'Ainda não criado'}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Boxes className="size-4" /></span><p className="mt-4 text-xs text-slate-500">{deployment.flowMode === 'hub_banco_only' ? 'Cobertura Banco Único' : 'Imagens confirmadas'}</p><p className="mt-1 text-sm font-semibold text-slate-800">{deployment.flowMode === 'hub_banco_only' ? `${Math.min(...deployment.units.map((unit) => unit.coveragePercent ?? 0)).toFixed(1)}%` : `${deployment.assets.filter((asset) => asset.status === 'confirmed').length} de ${deployment.assets.length}`}</p></div><div className="rounded-xl border border-[#dbe3ef] bg-white p-5"><span className="flex size-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Activity className="size-4" /></span><p className="mt-4 text-xs text-slate-500">Última atualização</p><p className="mt-1 text-sm font-semibold text-slate-800">{formatDate(deployment.updatedAt)}</p></div></section>
+
+      {feedback ? <FeedbackNotice feedback={feedback} onDismiss={dismissFeedback} /> : null}
+
+      <NextStep deployment={deployment} onRefresh={refreshAtenderBem} />
+
+      <div className="grid items-start gap-8 pt-2 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <section aria-labelledby="units-title" className="min-w-0">
+          <div className="flex items-center justify-between gap-3"><h2 id="units-title" className="text-sm font-semibold text-slate-950">Unidades <span className="ml-1 font-normal tabular-nums text-slate-500">{deployment.units.length}</span></h2>{canAddUnit ? <button type="button" onClick={() => setShowAddUnit(true)} className={compactButtonClass}><Plus className="size-3.5" />Adicionar unidade</button> : null}</div>
+          {deployment.units.length ? <ul className="mt-3 divide-y divide-slate-200 rounded-xl border border-slate-200">{deployment.units.map((unit) => <UnitRow key={unit.id} deployment={deployment} unit={unit} busyAction={busyAction} onAction={(action, target) => void handleUnitAction(action, target)} />)}</ul> : <p className="mt-3 rounded-xl border border-dashed border-slate-300 px-5 py-8 text-center text-sm text-slate-500">Nenhuma unidade cadastrada.</p>}
+        </section>
+        <div className="xl:sticky xl:top-6"><DeploymentTimeline events={deployment.events} units={deployment.units} /></div>
+      </div>
     </div></main>
     {showCancel ? <ConfirmDialog title="Cancelar esta implantação?" description="O processamento será interrompido. Recursos externos já criados no Hub, Unicommerce ou Banco Único não serão excluídos." confirmText="Cancelar implantação" cancelText="Manter processamento" tone="danger" loading={busyAction === 'cancel'} onClose={() => setShowCancel(false)} onConfirm={() => void handleDeploymentAction('cancel')} /> : null}
     {showSellerToken ? <SellerTokenDialog deploymentId={deployment.id} requestedBy={requestedBy} onClose={() => setShowSellerToken(false)} /> : null}

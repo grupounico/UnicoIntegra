@@ -21,6 +21,7 @@ import Integrations from '../Integrations/Integrations';
 import LinkAi from '../LinkAi/LinkAi';
 import Logs from '../SystemLogs/Logs';
 import { getAuthSession } from '../../utils/authSession';
+import { useSessionExpiryWatch } from '../../hooks/useAuthRedirect';
 import Clientes from '../Clientes/Clientes';
 import ClienteDetalhes from '../Clientes/ClienteDetalhes';
 import CatalogDeploymentsPage from '../Catalog/CatalogDeploymentsPage';
@@ -31,6 +32,8 @@ import EditCatalogDeploymentPage from '../Catalog/EditCatalogDeploymentPage';
 import CatalogAtenderBemPage from '../Catalog/CatalogAtenderBemPage';
 import CatalogAtenderBemAssistantPage from '../Catalog/CatalogAtenderBemAssistantPage';
 import CatalogAiPage from '../Catalog/CatalogAiPage';
+import CatalogMcpPage from '../Catalog/CatalogMcpPage';
+import CatalogMcpNewPage from '../Catalog/CatalogMcpNewPage';
 import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
 
 function CatalogImagesRoute() {
@@ -39,6 +42,7 @@ function CatalogImagesRoute() {
 }
 
 export default function App() {
+  useSessionExpiryWatch();
   const session = getAuthSession();
   const isCatalogDemo = CATALOG_DEMO_MODE && window.location.pathname.startsWith('/main/catalogo');
 
@@ -83,6 +87,8 @@ export default function App() {
             <Route path="clientes/:id" element={<ClienteDetalhes />} />
             <Route path="clientes" element={<Clientes />} />
             <Route path="catalogo" element={<CatalogDeploymentsPage />} />
+            <Route path="catalogo/mcp" element={<CatalogMcpPage />} />
+            <Route path="catalogo/mcp/novo" element={<CatalogMcpNewPage />} />
             <Route path="catalogo/novo" element={<NewCatalogDeploymentPage key="new" />} />
             <Route path="catalogo/:deploymentId/imagens" element={<CatalogImagesRoute />} />
             <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />

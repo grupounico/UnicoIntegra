@@ -21,7 +21,7 @@ const STATUS_LABELS: Record<DeploymentStatus | UnitStatus, string> = {
   unicommerce_tenant_created: 'Tenant criado', unicommerce_ready: 'Unicommerce pronto', banco_unico_importing: 'Importando no Banco Único', banco_unico_ready: 'Hub e Banco Único prontos', active: 'Ativa',
 };
 
-type Tone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'orange';
+export type Tone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'orange';
 
 export function statusTone(status: DeploymentStatus | UnitStatus): Tone {
   if (['completed', 'catalog_active', 'unicommerce_ready', 'banco_unico_ready', 'active'].includes(status)) return 'success';
@@ -49,6 +49,36 @@ export function StatusBadge({ status }: { status: DeploymentStatus | UnitStatus 
   const tone = statusTone(status);
   const Icon = tone === 'success' ? CheckCircle2 : tone === 'danger' ? XCircle : tone === 'warning' || tone === 'orange' ? TriangleAlert : tone === 'info' ? CircleDashed : Clock3;
   return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${toneClasses[tone]}`}><Icon className={`size-3.5 ${tone === 'info' ? 'animate-spin [animation-duration:2.5s]' : ''}`} />{statusLabel(status)}</span>;
+}
+
+const dotTones: Record<Tone, { dot: string; text: string }> = {
+  success: { dot: 'bg-emerald-500', text: 'text-emerald-800' },
+  info: { dot: 'bg-primary', text: 'text-slate-800' },
+  warning: { dot: 'bg-amber-500', text: 'text-amber-800' },
+  orange: { dot: 'bg-amber-500', text: 'text-amber-800' },
+  danger: { dot: 'bg-rose-500', text: 'text-rose-700' },
+  neutral: { dot: 'bg-slate-400', text: 'text-slate-600' },
+};
+
+// Flat status: colored dot plus text, truncating inside narrow cells.
+export function ToneDot({ tone, label, className = 'text-sm' }: { tone: Tone; label: string; className?: string }) {
+  const classes = dotTones[tone];
+  return <span className={`inline-flex min-w-0 max-w-full items-center gap-2 font-medium ${classes.text} ${className}`} title={label}><span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${classes.dot}`} /><span className="truncate">{label}</span></span>;
+}
+
+export function StatusDot({ status, className }: { status: DeploymentStatus | UnitStatus; className?: string }) {
+  return <ToneDot tone={statusTone(status)} label={statusLabel(status)} className={className} />;
+}
+
+const relative = new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' });
+export function relativeTime(value: string) {
+  let amount = (new Date(value).getTime() - Date.now()) / 1000;
+  const steps: [Intl.RelativeTimeFormatUnit, number][] = [['second', 60], ['minute', 60], ['hour', 24], ['day', 30], ['month', 12], ['year', Infinity]];
+  for (const [unit, size] of steps) {
+    if (Math.abs(amount) < size) return relative.format(Math.round(amount), unit);
+    amount /= size;
+  }
+  return formatDate(value);
 }
 
 export function formatCnpj(value: string) {

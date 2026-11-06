@@ -6,6 +6,9 @@ import LoginPage from './pages/LoginPage/LoginPage';
 import App from './pages/Main/App';
 import LegacyDocsRedirect from './components/LegacyDocsRedirect';
 import './globals.css';
+import { installSessionGuard } from './services/sessionGuard';
+
+installSessionGuard();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -510,6 +510,15 @@ export async function listDeployments(params: { page?: number; pageSize?: number
   return { data: data.slice((page - 1) * pageSize, page * pageSize), meta: { page, pageSize, totalItems: data.length, totalPages: Math.max(1, Math.ceil(data.length / pageSize)), summary } };
 }
 
+// Loads every deployment once (100 per request, in parallel) so the list screen can
+// filter, sort and paginate in the browser without calling the API again.
+export async function listAllDeployments(): Promise<Deployment[]> {
+  const pageSize = 100;
+  const first = await listDeployments({ page: 1, pageSize });
+  const rest = await Promise.all(Array.from({ length: Math.max(0, first.meta.totalPages - 1) }, (_, index) => listDeployments({ page: index + 2, pageSize })));
+  return [first, ...rest].flatMap((result) => result.data);
+}
+
 export async function getDeployment(id: string): Promise<Deployment> {
   if (!CATALOG_DEMO_MODE) return request(`/api/v1/deployments/${id}`);
   return mockUpdate(id, evolveMock);
