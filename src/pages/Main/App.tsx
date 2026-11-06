@@ -21,6 +21,7 @@ import Integrations from '../Integrations/Integrations';
 import LinkAi from '../LinkAi/LinkAi';
 import Logs from '../SystemLogs/Logs';
 import { getAuthSession } from '../../utils/authSession';
+import { useSessionExpiryWatch } from '../../hooks/useAuthRedirect';
 import Clientes from '../Clientes/Clientes';
 import ClienteDetalhes from '../Clientes/ClienteDetalhes';
 import CatalogDeploymentsPage from '../Catalog/CatalogDeploymentsPage';
@@ -41,6 +42,7 @@ function CatalogImagesRoute() {
 }
 
 export default function App() {
+  useSessionExpiryWatch();
   const session = getAuthSession();
   const isCatalogDemo = CATALOG_DEMO_MODE && window.location.pathname.startsWith('/main/catalogo');
 

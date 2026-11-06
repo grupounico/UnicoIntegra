@@ -4,7 +4,7 @@ import axios from 'axios';
 
 import LoadingScreen from '../../components/LoadingScreen/LoadingScreen';
 import { useRedirectIfAuthenticated } from '../../hooks/useAuthRedirect';
-import { setAuthSession } from '../../utils/authSession';
+import { hasSessionExpiredNotice, setAuthSession } from '../../utils/authSession';
 import './LoginPage.scss';
 
 export default function LoginPage() {
@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sessionExpired] = useState(hasSessionExpiredNotice);
   const navigate = useNavigate();
 
   useRedirectIfAuthenticated('/main/home');
@@ -110,6 +111,7 @@ export default function LoginPage() {
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
 
+          {sessionExpired && !error ? <p className="error" role="status">Sua sessão expirou. Entre novamente para continuar.</p> : null}
           {error ? <p className="error">{error}</p> : null}
         </form>
       </section>
