@@ -32,6 +32,7 @@ import CatalogAtenderBemPage from '../Catalog/CatalogAtenderBemPage';
 import CatalogAtenderBemAssistantPage from '../Catalog/CatalogAtenderBemAssistantPage';
 import CatalogAiPage from '../Catalog/CatalogAiPage';
 import CatalogMcpPage from '../Catalog/CatalogMcpPage';
+import CatalogMcpNewPage from '../Catalog/CatalogMcpNewPage';
 import { CATALOG_DEMO_MODE } from '../../services/catalogDeployment.service';
 
 function CatalogImagesRoute() {
@@ -85,6 +86,7 @@ export default function App() {
             <Route path="clientes" element={<Clientes />} />
             <Route path="catalogo" element={<CatalogDeploymentsPage />} />
             <Route path="catalogo/mcp" element={<CatalogMcpPage />} />
+            <Route path="catalogo/mcp/novo" element={<CatalogMcpNewPage />} />
             <Route path="catalogo/novo" element={<NewCatalogDeploymentPage key="new" />} />
             <Route path="catalogo/:deploymentId/imagens" element={<CatalogImagesRoute />} />
             <Route path="catalogo/:deploymentId/revisao" element={<CatalogActivationReviewPage />} />
